@@ -100,3 +100,11 @@ canvas.zoom { display: block; cursor: crosshair; }
   .row { grid-template-columns: auto auto 1fr; }
   .row .cell, .row .icon-btn { grid-column: span 3; }
 }
+.thumb-wrap { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+.thumb { position: relative; }
+.badge {
+  position: absolute; right: -6px; top: -6px; background: var(--accent); color: #fff; font-style: normal;
+  font-size: 11px; border-radius: 8px; padding: 0 5px;
+}
+.thumb-actions { display: flex; flex-direction: column; align-items: center; font-size: 11px; }
+.thumb-actions .link { font-size: 11px; }

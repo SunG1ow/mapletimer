@@ -11,9 +11,15 @@ export interface TemplateData {
   height: number
   /** 템플릿 안에서 숫자가 표시되는 영역. 매칭에서 제외하고 OCR에 쓴다. */
   digitRect: Rect | null
+  /** 룬: 가장자리(미니맵 배경)와 이 값 이상 다른 픽셀만 비교한다. */
+  bgTolerance?: number
 }
 
-export type Templates = Record<string, TemplateData> // 프로필 키 → 템플릿
+/** 프로필 키 → 모양 목록. 한 아이콘이 상태에 따라 다르게 보이면(m:ss / 큰 ss / 깜빡임) 여러 개 등록한다. */
+export type Templates = Record<string, TemplateData[]>
+
+export const ALERT_BEFORE_MIN = 10
+export const ALERT_BEFORE_MAX = 54
 
 export type TimedGroup = 'skill' | 'buff'
 
@@ -36,6 +42,10 @@ export interface RuneAlert {
   enabled: boolean
   templates: Templates
   repeatSec: number
+  /** 검사 간격(초). 룬은 몇 초 늦어도 괜찮아 자주 볼 필요가 없다. */
+  checkSec: number
+  /** 룬 모양 픽셀 중 이 비율 이상 일치하면 발견(플레이어 점에 일부 가려져도 찾도록) */
+  matchRatio: number
   speech: string
 }
 
@@ -77,7 +87,7 @@ export function newTimedAlert(group: TimedGroup, name: string): TimedAlert {
     templates: {},
     mode: 'ocr',
     durationSec: 60,
-    alertBeforeSec: group === 'skill' ? 5 : 10,
+    alertBeforeSec: group === 'skill' ? 10 : 20,
     alertOnExpire: group === 'buff',
     colonUnit: 'ms',
     plainUnit: 's',
@@ -95,11 +105,18 @@ export function defaultSettings(): Settings {
     matchThreshold: 0.8,
     regions: DEFAULT_REGIONS,
     timed: [newTimedAlert('skill', '솔 야누스 : 새벽')],
-    rune: { enabled: true, templates: {}, repeatSec: 30, speech: '룬' },
+    rune: { enabled: true, templates: {}, repeatSec: 30, checkSec: 1, matchRatio: 0.65, speech: '룬' },
     profiles: {},
   }
 }
 
 export function profileKey(width: number, height: number): string {
   return `${width}x${height}`
+}
+
+/** 예전 저장 형식(프로필당 템플릿 1개)을 목록으로 바꾼다. */
+export function normalizeTemplates(t: Record<string, TemplateData | TemplateData[]> | undefined): Templates {
+  const out: Templates = {}
+  for (const [k, v] of Object.entries(t ?? {})) out[k] = Array.isArray(v) ? v : [v]
+  return out
 }

@@ -188,3 +188,160 @@ export function findTemplate(region: Rgba, t: PreparedTemplate, topK = 5): Match
   }
   return best
 }
+
+// ---- 룬용: 배경 무시 + 가림 허용 매칭 ----
+// 미니맵 배경은 맵마다 다르고, 플레이어 점(노랑/빨강/하늘색 원)이 룬 일부를 가릴 수 있다.
+// 그래서 상관계수 대신 "룬 모양 픽셀 중 색이 맞는 비율"을 점수로 쓴다.
+
+/** 가장자리 픽셀의 중앙값 색을 배경으로 보고, 그와 tol 이상 다른 픽셀을 전경(1)으로 표시한다. */
+export function foregroundMask(img: Rgba, tol: number): Uint8Array {
+  const { width: w, height: h, data } = img
+  const border: number[][] = [[], [], []]
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (x !== 0 && y !== 0 && x !== w - 1 && y !== h - 1) continue
+      const i = (y * w + x) * 4
+      for (let c = 0; c < 3; c++) border[c].push(data[i + c])
+    }
+  }
+  const med = border.map((v) => v.sort((a, b) => a - b)[v.length >> 1])
+  const mask = new Uint8Array(w * h)
+  let on = 0
+  for (let i = 0; i < w * h; i++) {
+    const d = Math.max(
+      Math.abs(data[i * 4] - med[0]),
+      Math.abs(data[i * 4 + 1] - med[1]),
+      Math.abs(data[i * 4 + 2] - med[2]),
+    )
+    if (d >= tol) {
+      mask[i] = 1
+      on++
+    }
+  }
+  // 전경이 거의 없으면 마스크가 의미 없으니 전체 비교로 돌아간다.
+  if (on < 5) return mask.fill(1)
+  // 룬은 발판 위에 뜨므로 1px 발판 선이 같이 잘린다. 열림 연산(침식→팽창)으로 얇은 선을 걷어낸다.
+  const opened = morph(morph(mask, w, h, 'erode'), w, h, 'dilate')
+  for (let i = 0; i < opened.length; i++) opened[i] &= mask[i]
+  return opened.reduce((a, b) => a + b, 0) >= 5 ? opened : mask
+}
+
+function morph(m: Uint8Array, w: number, h: number, op: 'erode' | 'dilate'): Uint8Array {
+  const out = new Uint8Array(m.length)
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      let v = op === 'erode' ? 1 : 0
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx
+          const yy = y + dy
+          const p = xx < 0 || yy < 0 || xx >= w || yy >= h ? 0 : m[yy * w + xx]
+          if (op === 'erode') v &= p
+          else v |= p
+        }
+      }
+      out[y * w + x] = v
+    }
+  }
+  return out
+}
+
+export interface PreparedShape {
+  width: number
+  height: number
+  idx: Int32Array // 템플릿 내 전경 픽셀 인덱스
+  rgb: Uint8Array // 전경 픽셀 색 (r,g,b 반복)
+}
+
+export function prepareShape(img: Rgba, mask: Uint8Array): PreparedShape {
+  const idx: number[] = []
+  const rgb: number[] = []
+  for (let i = 0; i < mask.length; i++) {
+    if (!mask[i]) continue
+    idx.push(i)
+    rgb.push(img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2])
+  }
+  return { width: img.width, height: img.height, idx: Int32Array.from(idx), rgb: Uint8Array.from(rgb) }
+}
+
+const COLOR_TOL = 48
+
+/** 미니맵 플레이어 점 색: 노랑(본인), 빨강(다른 사람), 하늘색(길드원), 초록(파티) */
+export const PLAYER_DOT_COLORS: readonly (readonly [number, number, number])[] = [
+  [255, 230, 0],
+  [255, 40, 40],
+  [80, 220, 255],
+  [60, 230, 60],
+]
+const DOT_TOL = 70
+
+function nearDot(r: number, g: number, b: number): boolean {
+  for (const c of PLAYER_DOT_COLORS) {
+    if (Math.abs(r - c[0]) <= DOT_TOL && Math.abs(g - c[1]) <= DOT_TOL && Math.abs(b - c[2]) <= DOT_TOL) return true
+  }
+  return false
+}
+
+/**
+ * 플레이어 점에 가려진 픽셀은 판단에서 빼고 "보이는 부분 중 맞는 비율"을 낸다.
+ * 다만 절반 넘게 가려지면 근거가 부족하니 보이는 비율만큼 깎는다.
+ */
+function fractionAt(region: Rgba, offs: Int32Array, s: PreparedShape, base: number): number {
+  const d = region.data
+  const n = offs.length
+  let hit = 0
+  let hidden = 0
+  for (let k = 0; k < n; k++) {
+    const p = (base + offs[k]) * 4
+    const q = k * 3
+    if (
+      Math.abs(d[p] - s.rgb[q]) <= COLOR_TOL &&
+      Math.abs(d[p + 1] - s.rgb[q + 1]) <= COLOR_TOL &&
+      Math.abs(d[p + 2] - s.rgb[q + 2]) <= COLOR_TOL
+    )
+      hit++
+    else if (nearDot(d[p], d[p + 1], d[p + 2])) hidden++
+    // 남은 픽셀이 모두 맞아도 30%를 못 넘으면 중단
+    else if ((k & 7) === 7 && hit + hidden + (n - k) < n * 0.3) return 0
+  }
+  const visible = n - hidden
+  if (visible <= 0) return 0
+  return (hit / visible) * Math.min(1, visible / (n * 0.5))
+}
+
+/** 점수 = 전경 픽셀 중 색이 맞는 비율(0..1). 2px 간격으로 훑고 상위 후보 주변을 정밀 탐색. */
+export function findShape(region: Rgba, s: PreparedShape): MatchResult | null {
+  const mw = region.width - s.width + 1
+  const mh = region.height - s.height + 1
+  if (mw <= 0 || mh <= 0 || !s.idx.length) return null
+  const offs = new Int32Array(s.idx.length)
+  for (let k = 0; k < s.idx.length; k++) {
+    const ti = s.idx[k]
+    offs[k] = Math.floor(ti / s.width) * region.width + (ti % s.width)
+  }
+  const top: MatchResult[] = []
+  for (let y = 0; y < mh; y += 2) {
+    for (let x = 0; x < mw; x += 2) {
+      const score = fractionAt(region, offs, s, y * region.width + x)
+      if (score <= 0.3) continue
+      if (top.length < 5 || score > top[top.length - 1].score) {
+        top.push({ x, y, score })
+        top.sort((a, b) => b.score - a.score)
+        if (top.length > 5) top.pop()
+      }
+    }
+  }
+  let best: MatchResult | null = null
+  for (const c of top) {
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const x = c.x + dx
+        const y = c.y + dy
+        if (x < 0 || y < 0 || x >= mw || y >= mh) continue
+        const score = fractionAt(region, offs, s, y * region.width + x)
+        if (!best || score > best.score) best = { x, y, score }
+      }
+    }
+  }
+  return best
+}

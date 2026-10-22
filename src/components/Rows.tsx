@@ -1,6 +1,6 @@
 // 알림 한 줄씩의 UI.
 
-import type { RuneAlert, TimedAlert } from '../config'
+import { ALERT_BEFORE_MAX, ALERT_BEFORE_MIN, type RuneAlert, type TemplateData, type TimedAlert } from '../config'
 import type { TargetStatus } from '../app/engine'
 import { formatSec } from '../core/time'
 
@@ -12,16 +12,30 @@ function Toggle(p: { on: boolean; onChange: (v: boolean) => void }) {
   )
 }
 
-function Thumb(p: { png?: string; onEdit: () => void; disabled: boolean }) {
+function Thumb(p: { list?: TemplateData[]; onAdd: () => void; onClear: () => void; disabled: boolean; addLabel: string }) {
+  const list = p.list ?? []
   return (
-    <button
-      className="thumb"
-      onClick={p.onEdit}
-      disabled={p.disabled}
-      title={p.disabled ? '화면 공유를 먼저 시작하세요' : '화면에서 아이콘 등록'}
-    >
-      {p.png ? <img src={p.png} alt="" className="pixel" /> : <span>등록</span>}
-    </button>
+    <div className="thumb-wrap">
+      <button
+        className="thumb"
+        onClick={p.onAdd}
+        disabled={p.disabled}
+        title={p.disabled ? '화면 공유를 먼저 시작하세요' : '지금 화면에서 모양 추가'}
+      >
+        {list.length ? <img src={list[0].png} alt="" className="pixel" /> : <span>등록</span>}
+        {list.length > 1 && <em className="badge">{list.length}</em>}
+      </button>
+      {list.length > 0 && (
+        <div className="thumb-actions">
+          <button className="link" onClick={p.onAdd} disabled={p.disabled}>
+            {p.addLabel}
+          </button>
+          <button className="link muted" onClick={p.onClear}>
+            초기화
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -33,15 +47,25 @@ function statusText(st: TargetStatus | undefined, hasTemplate: boolean, active: 
   return { cls: 'ok', label: `감지 ${st.score.toFixed(2)}` }
 }
 
-function NumberField(p: { value: number; onChange: (v: number) => void; suffix: string; min?: number; width?: number }) {
+function NumberField(p: {
+  value: number
+  onChange: (v: number) => void
+  suffix: string
+  min?: number
+  max?: number
+  width?: number
+}) {
+  const min = p.min ?? 0
+  const max = p.max ?? Infinity
   return (
     <span className="numfield">
       <input
         type="number"
-        min={p.min ?? 0}
+        min={min}
+        max={Number.isFinite(max) ? max : undefined}
         value={p.value}
         style={{ width: p.width ?? 56 }}
-        onChange={(e) => p.onChange(Math.max(p.min ?? 0, Number(e.target.value) || 0))}
+        onChange={(e) => p.onChange(Math.min(max, Math.max(min, Number(e.target.value) || 0)))}
       />
       {p.suffix}
     </span>
@@ -55,18 +79,20 @@ export function TimedRow(p: {
   active: boolean
   onChange: (a: TimedAlert) => void
   onEdit: () => void
+  onClear: () => void
   onDelete: () => void
   onTeach: () => void
 }) {
   const a = p.alert
-  const tpl = p.profile ? a.templates[p.profile] : undefined
+  const list = p.profile ? a.templates[p.profile] : undefined
+  const tpl = list?.[p.status?.variant ?? 0] ?? list?.[0]
   const st = statusText(p.status, !!tpl, p.active)
   const set = (patch: Partial<TimedAlert>) => p.onChange({ ...a, ...patch })
   const remaining = p.status?.remainingSec
   return (
     <div className={`row ${a.enabled ? '' : 'off'}`}>
       <Toggle on={a.enabled} onChange={(enabled) => set({ enabled })} />
-      <Thumb png={tpl?.png} onEdit={p.onEdit} disabled={!p.active} />
+      <Thumb list={list} onAdd={p.onEdit} onClear={p.onClear} disabled={!p.active} addLabel="모양 추가" />
       <div className="row-main">
         <input className="name" value={a.name} onChange={(e) => set({ name: e.target.value })} />
         <div className="row-sub">
@@ -88,7 +114,13 @@ export function TimedRow(p: {
       </div>
       <div className="cell">
         <label>알림 시점</label>
-        <NumberField value={a.alertBeforeSec} onChange={(alertBeforeSec) => set({ alertBeforeSec })} suffix="초 전" />
+        <NumberField
+          value={a.alertBeforeSec}
+          min={ALERT_BEFORE_MIN}
+          max={ALERT_BEFORE_MAX}
+          onChange={(alertBeforeSec) => set({ alertBeforeSec })}
+          suffix="초 전"
+        />
       </div>
       <div className="cell">
         <label>시간 기준</label>
@@ -131,15 +163,17 @@ export function RuneRow(p: {
   active: boolean
   onChange: (r: RuneAlert) => void
   onEdit: () => void
+  onClear: () => void
 }) {
   const r = p.rune
-  const tpl = p.profile ? r.templates[p.profile] : undefined
+  const list = p.profile ? r.templates[p.profile] : undefined
+  const tpl = list?.[0]
   const st = statusText(p.status, !!tpl, p.active)
   const set = (patch: Partial<RuneAlert>) => p.onChange({ ...r, ...patch })
   return (
     <div className={`row ${r.enabled ? '' : 'off'}`}>
       <Toggle on={r.enabled} onChange={(enabled) => set({ enabled })} />
-      <Thumb png={tpl?.png} onEdit={p.onEdit} disabled={!p.active} />
+      <Thumb list={list} onAdd={p.onEdit} onClear={p.onClear} disabled={!p.active} addLabel="다른 맵 룬 추가" />
       <div className="row-main">
         <strong>미니맵 룬</strong>
         <div className="row-sub">
@@ -148,8 +182,23 @@ export function RuneRow(p: {
         </div>
       </div>
       <div className="cell">
+        <label>검사 간격</label>
+        <NumberField value={r.checkSec} min={1} max={30} onChange={(checkSec) => set({ checkSec })} suffix="초" width={44} />
+      </div>
+      <div className="cell">
         <label>반복 알림</label>
         <NumberField value={r.repeatSec} onChange={(repeatSec) => set({ repeatSec })} suffix="초마다 (0=한 번)" />
+      </div>
+      <div className="cell">
+        <label>일치 비율 {Math.round(r.matchRatio * 100)}%</label>
+        <input
+          type="range"
+          min={0.4}
+          max={0.95}
+          step={0.05}
+          value={r.matchRatio}
+          onChange={(e) => set({ matchRatio: Number(e.target.value) })}
+        />
       </div>
       <div className="cell">
         <label>음성</label>

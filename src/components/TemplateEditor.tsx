@@ -5,6 +5,7 @@ import type { TemplateData } from '../config'
 import { binarize, findThreshold, segment, type DigitBank } from '../core/digits'
 import type { Rect } from '../core/image'
 import { cropToPng, cropToRgba } from '../app/templates'
+import { foregroundMask } from '../core/match'
 
 type Step = 'area' | 'icon' | 'digits' | 'learn'
 
@@ -90,6 +91,7 @@ export function TemplateEditor(p: Props) {
   const [icon, setIcon] = useState<Rect | null>(null)
   const [digits, setDigits] = useState<Rect | null>(null)
   const [learnText, setLearnText] = useState('')
+  const [bgTol, setBgTol] = useState(40)
 
   const fullScale = Math.min(1, 1100 / snap.width)
   const fw = Math.round(snap.width * fullScale)
@@ -149,6 +151,27 @@ export function TemplateEditor(p: Props) {
     return { url: c.toDataURL(), glyphs }
   }, [snap, digits, p.bank.threshold])
 
+  // 룬: 비교에 쓰일 픽셀만 밝게, 배경(무시)은 어둡게 보여준다.
+  const maskPreview = useMemo(() => {
+    if (p.withDigits || !icon) return null
+    const img = cropToRgba(snap, icon)
+    const mask = foregroundMask(img, bgTol)
+    const z = Math.max(4, Math.floor(160 / Math.max(icon.w, icon.h)))
+    const c = document.createElement('canvas')
+    c.width = icon.w * z
+    c.height = icon.h * z
+    const g = c.getContext('2d')!
+    for (let y = 0; y < icon.h; y++) {
+      for (let x = 0; x < icon.w; x++) {
+        const i = (y * icon.w + x) * 4
+        const k = mask[y * icon.w + x] ? 1 : 0.15
+        g.fillStyle = `rgb(${img.data[i] * k},${img.data[i + 1] * k},${img.data[i + 2] * k})`
+        g.fillRect(x * z, y * z, z, z)
+      }
+    }
+    return { url: c.toDataURL(), count: mask.reduce((a, b) => a + b, 0) }
+  }, [p.withDigits, icon, snap, bgTol])
+
   const save = () => {
     if (!icon) return
     p.onSave({
@@ -157,6 +180,7 @@ export function TemplateEditor(p: Props) {
         width: icon.w,
         height: icon.h,
         digitRect: digits ? { x: digits.x - icon.x, y: digits.y - icon.y, w: digits.w, h: digits.h } : null,
+        ...(p.withDigits ? {} : { bgTolerance: bgTol }),
       },
       learnText: digits && learnText.trim() ? learnText.trim() : null,
     })
@@ -230,6 +254,22 @@ export function TemplateEditor(p: Props) {
               />
             </div>
           </>
+        )}
+
+        {maskPreview && (
+          <div className="learn">
+            <img src={maskPreview.url} alt="룬 비교 영역" className="pixel" />
+            <div className="learn-form">
+              <label>
+                배경 구분 {bgTol}
+                <input type="range" min={10} max={120} value={bgTol} onChange={(e) => setBgTol(Number(e.target.value))} />
+              </label>
+              <small>
+                밝게 보이는 픽셀({maskPreview.count}개)만 비교합니다. 룬 모양만 밝고 미니맵 배경·발판은 어둡게 되도록 조절하세요.
+                플레이어 점(노랑/빨강/하늘색)에 가려진 부분은 자동으로 무시됩니다.
+              </small>
+            </div>
+          </div>
         )}
 
         {step === 'learn' && digitPreview && (

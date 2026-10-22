@@ -47,7 +47,7 @@ function process(src: VideoFrame | ImageBitmap, w: number, h: number) {
   if (!configured) return
   const t0 = performance.now()
   const frame = grab(src, w, h)
-  const detections = detector.detect(frame)
+  const detections = detector.detect(frame, t0)
   const transfer = detections.flatMap((d) => (d.digitCrop ? [d.digitCrop.data.buffer] : []))
   post(
     { type: 'result', at: Date.now(), width: w, height: h, ms: performance.now() - t0, detections },

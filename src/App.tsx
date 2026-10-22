@@ -4,7 +4,15 @@ import { Engine, RUNE_ID, type EngineSnapshot } from './app/engine'
 import { beep, speak, unlockAudio } from './app/sound'
 import { exportSettings, useSettings } from './app/store'
 import { decodePng, rgbaToDataUrl } from './app/templates'
-import { newTimedAlert, profileKey, type Regions, type Settings, type TemplateData, type TimedGroup } from './config'
+import {
+  newTimedAlert,
+  profileKey,
+  type Regions,
+  type Settings,
+  type TemplateData,
+  type Templates,
+  type TimedGroup,
+} from './config'
 import { emptyBank, findThreshold, learn, learnedChars, segment, type DigitBank } from './core/digits'
 import { cropRgba, type Rect, type Rgba } from './core/image'
 import type { TargetSpec } from './detector'
@@ -65,12 +73,15 @@ export default function App() {
   const detectorKey = useMemo(() => {
     if (!profile) return null
     const timed = settings.timed
-      .filter((a) => a.enabled && a.templates[profile])
+      .filter((a) => a.enabled && a.templates[profile]?.length)
       .map((a) => ({ id: a.id, group: a.group, t: a.templates[profile] }))
-    const rune = settings.rune.enabled ? settings.rune.templates[profile] : undefined
+    const r = settings.rune
+    const rune = r.enabled && r.templates[profile]?.length ? r.templates[profile] : undefined
     return JSON.stringify({
       timed,
       rune,
+      runeRatio: r.matchRatio,
+      runeCheckSec: r.checkSec,
       regions: settings.regions,
       th: settings.matchThreshold,
       fps: settings.fps,
@@ -81,30 +92,51 @@ export default function App() {
   useEffect(() => {
     if (!detectorKey || !captureRef.current) return
     const cfg = JSON.parse(detectorKey) as {
-      timed: { id: string; group: TimedGroup; t: TemplateData }[]
-      rune?: TemplateData
+      timed: { id: string; group: TimedGroup; t: TemplateData[] }[]
+      rune?: TemplateData[]
+      runeRatio: number
+      runeCheckSec: number
       regions: Regions
       th: number
       fps: number
       bank: DigitBank
     }
+    // 디코드 결과는 캐시에서 공유되므로 워커에는 복사본을 보낸다.
+    const variants = (list: TemplateData[]) =>
+      Promise.all(
+        list.map(async (t) => {
+          const img = await decodePng(t.png)
+          return {
+            rgba: { ...img, data: new Uint8ClampedArray(img.data) },
+            digitRect: t.digitRect,
+            bgTolerance: t.bgTolerance,
+          }
+        }),
+      )
     let cancelled = false
     void (async () => {
       const targets: TargetSpec[] = []
       for (const a of cfg.timed) {
-        targets.push({ id: a.id, region: cfg.regions[a.group], rgba: await decodePng(a.t.png), digitRect: a.t.digitRect })
+        targets.push({
+          id: a.id,
+          region: cfg.regions[a.group],
+          variants: await variants(a.t),
+          method: 'ncc',
+          threshold: cfg.th,
+        })
       }
       if (cfg.rune) {
-        targets.push({ id: RUNE_ID, region: cfg.regions.rune, rgba: await decodePng(cfg.rune.png), digitRect: null })
+        targets.push({
+          id: RUNE_ID,
+          region: cfg.regions.rune,
+          variants: await variants(cfg.rune),
+          method: 'shape',
+          threshold: cfg.runeRatio,
+          intervalMs: cfg.runeCheckSec * 1000,
+        })
       }
       if (cancelled) return
-      // 디코드 결과는 캐시에서 공유되므로 복사본을 보낸다.
-      const copies = targets.map((t) => ({ ...t, rgba: { ...t.rgba, data: new Uint8ClampedArray(t.rgba.data) } }))
-      captureRef.current?.send({
-        type: 'config',
-        fps: cfg.fps,
-        config: { threshold: cfg.th, digitBank: cfg.bank, targets: copies },
-      })
+      captureRef.current?.send({ type: 'config', fps: cfg.fps, config: { digitBank: cfg.bank, targets } })
       captureRef.current?.setFps(cfg.fps)
     })()
     return () => {
@@ -140,10 +172,12 @@ export default function App() {
   const saveEditor = (r: EditorResult) => {
     if (!editor || !profile) return
     const id = editor.id
+    // 모양은 덮어쓰지 않고 추가한다(m:ss / 큰 ss / 깜빡임 등 상태별, 룬은 맵별).
+    const add = (t: Templates): Templates => ({ ...t, [profile]: [...(t[profile] ?? []), r.template] })
     update((s) =>
       id === RUNE_ID
-        ? { ...s, rune: { ...s.rune, templates: { ...s.rune.templates, [profile]: r.template } } }
-        : { ...s, timed: s.timed.map((a) => (a.id === id ? { ...a, templates: { ...a.templates, [profile]: r.template } } : a)) },
+        ? { ...s, rune: { ...s.rune, templates: add(s.rune.templates) } }
+        : { ...s, timed: s.timed.map((a) => (a.id === id ? { ...a, templates: add(a.templates) } : a)) },
     )
     const dr = r.template.digitRect
     if (r.learnText && dr) {
@@ -168,6 +202,14 @@ export default function App() {
         active={active}
         onChange={(na) => update((s) => ({ ...s, timed: s.timed.map((x) => (x.id === na.id ? na : x)) }))}
         onEdit={() => openEditor(a.id, a.name, true)}
+        onClear={() =>
+          profile &&
+          confirm(`"${a.name}"의 ${profile} 모양을 모두 지울까요?`) &&
+          update((s) => ({
+            ...s,
+            timed: s.timed.map((x) => (x.id === a.id ? { ...x, templates: { ...x.templates, [profile]: [] } } : x)),
+          }))
+        }
         onDelete={() => {
           if (confirm(`"${a.name}" 알림을 삭제할까요?`)) update((s) => ({ ...s, timed: s.timed.filter((x) => x.id !== a.id) }))
         }}
@@ -282,6 +324,11 @@ export default function App() {
           active={active}
           onChange={(rune) => update((s) => ({ ...s, rune }))}
           onEdit={() => openEditor(RUNE_ID, '룬', false)}
+          onClear={() =>
+            profile &&
+            confirm(`${profile} 룬 모양을 모두 지울까요?`) &&
+            update((s) => ({ ...s, rune: { ...s.rune, templates: { ...s.rune.templates, [profile]: [] } } }))
+          }
         />
       </section>
 

@@ -11,6 +11,7 @@ import { fireAlert } from './sound'
 export interface TargetStatus {
   found: boolean
   score: number
+  variant: number
   text: string | null
   remainingSec: number | null
   digitCrop: Rgba | null
@@ -40,6 +41,11 @@ export function alertText(a: TimedAlert, kind: 'alert' | 'expired'): string {
   return kind === 'alert' ? `${name} ${a.alertBeforeSec}초 전` : `${name} 종료`
 }
 
+// 플레이어가 룬 위에 서서 잠깐 다 가려도 "사라짐"으로 보지 않도록 몇 번 연속 놓쳐야 사라진 것으로 본다.
+function runeOptions(s: Settings) {
+  return { repeatSec: s.rune.repeatSec, hitsToAppear: 2, missesToDisappear: 5 }
+}
+
 export class Engine {
   private settings: Settings
   private timed = new Map<string, TimedTracker>()
@@ -51,7 +57,7 @@ export class Engine {
 
   constructor(settings: Settings) {
     this.settings = settings
-    this.rune = new PresenceTracker({ repeatSec: settings.rune.repeatSec })
+    this.rune = new PresenceTracker(runeOptions(settings))
     this.setSettings(settings)
   }
 
@@ -69,7 +75,7 @@ export class Engine {
       if (t) t.setOptions(timedOptions(a))
       else this.timed.set(a.id, new TimedTracker(timedOptions(a)))
     }
-    this.rune.setOptions({ repeatSec: s.rune.repeatSec })
+    this.rune.setOptions(runeOptions(s))
   }
 
   reset() {
@@ -85,7 +91,8 @@ export class Engine {
   }
 
   handle(detections: Detection[], frameMs: number, now = Date.now()) {
-    const targets: Record<string, TargetStatus> = {}
+    // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
+    const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
     for (const d of detections) {
       if (d.id === RUNE_ID) {
         if (!this.settings.rune.enabled) continue
@@ -118,5 +125,5 @@ export class Engine {
 }
 
 function base(d: Detection) {
-  return { found: d.found, score: d.score, text: d.text, digitCrop: d.digitCrop }
+  return { found: d.found, score: d.score, variant: d.variant, text: d.text, digitCrop: d.digitCrop }
 }
