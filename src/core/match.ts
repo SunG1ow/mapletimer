@@ -30,8 +30,9 @@ export function prepareTemplate(rgba: Rgba, exclude?: Rect | null): PreparedTemp
       }
     }
   }
-  // 축소 후에도 한 변이 최소 6px 남도록 배율을 고른다.
-  const coarseScale = Math.max(1, Math.min(4, Math.floor(Math.min(width, height) / 6)))
+  // 축소 탐색 배율. 이펙트가 많은 사냥 화면에서는 4배 축소하면 진짜 위치가 후보에서 빠지는 일이 있어
+  // (실제 스크린샷으로 확인) 최대 2배로 제한한다.
+  const coarseScale = Math.max(1, Math.min(2, Math.floor(Math.min(width, height) / 6)))
   return {
     width,
     height,
@@ -48,6 +49,7 @@ interface ZeroMeanTemplate {
   values: Float32Array // 평균을 뺀 값
   sumSq: number
   n: number
+  offsCache: Map<number, Int32Array> // 영상 폭 → 영상 인덱스 오프셋
 }
 
 function zeroMean(t: Gray, mask: Uint8Array): ZeroMeanTemplate {
@@ -68,15 +70,18 @@ function zeroMean(t: Gray, mask: Uint8Array): ZeroMeanTemplate {
     values[k] = v
     sumSq += v * v
   }
-  return { offsetsT: Int32Array.from(idx), values, sumSq, n }
+  return { offsetsT: Int32Array.from(idx), values, sumSq, n, offsCache: new Map() }
 }
 
 function imageOffsets(zt: ZeroMeanTemplate, tWidth: number, imgWidth: number): Int32Array {
+  const cached = zt.offsCache.get(imgWidth)
+  if (cached) return cached
   const out = new Int32Array(zt.n)
   for (let k = 0; k < zt.n; k++) {
     const ti = zt.offsetsT[k]
     out[k] = Math.floor(ti / tWidth) * imgWidth + (ti % tWidth)
   }
+  zt.offsCache.set(imgWidth, out)
   return out
 }
 
@@ -127,15 +132,45 @@ export function colorScore(planes: Gray[], t: PreparedTemplate, x: number, y: nu
   return used ? total / used : 0
 }
 
+/** 탐색 영역 하나의 회색조/채널 데이터. 같은 영역을 보는 여러 템플릿이 한 프레임 안에서 공유한다. */
+export class SearchRegion {
+  readonly rgba: Rgba
+  private grays = new Map<number, Gray>()
+  private planesCache: Gray[] | null = null
+
+  constructor(rgba: Rgba) {
+    this.rgba = rgba
+  }
+
+  gray(scale: number): Gray {
+    let g = this.grays.get(scale)
+    if (!g) {
+      let base = this.grays.get(1)
+      if (!base) {
+        base = toGray(this.rgba)
+        this.grays.set(1, base)
+      }
+      g = downscale(base, scale)
+      this.grays.set(scale, g)
+    }
+    return g
+  }
+
+  planes(): Gray[] {
+    return (this.planesCache ??= toPlanes(this.rgba))
+  }
+}
+
 /**
  * region(이미 잘라낸 탐색 영역) 안에서 템플릿의 최적 위치를 찾는다.
  * 반환 좌표는 region 기준.
  */
-export function findTemplate(region: Rgba, t: PreparedTemplate, topK = 5): MatchResult | null {
-  if (region.width < t.width || region.height < t.height) return null
+export function findTemplate(input: Rgba | SearchRegion, t: PreparedTemplate, topK = 60): MatchResult | null {
+  const region = input instanceof SearchRegion ? input : new SearchRegion(input)
+  if (region.rgba.width < t.width || region.rgba.height < t.height) return null
   const s = t.coarseScale
   const z = zeroMeans(t)
-  const gray = downscale(toGray(region), s)
+  const gray = region.gray(s)
   const tw = t.coarseGray.width
   const th = t.coarseGray.height
   const mw = gray.width - tw + 1
@@ -150,30 +185,42 @@ export function findTemplate(region: Rgba, t: PreparedTemplate, topK = 5): Match
     }
   }
 
-  // 상위 후보를 비최대 억제로 고른다.
+  // 지역 최댓값만 모아 점수순으로 정렬한 뒤, 가까운 것은 건너뛰며 상위 후보를 고른다.
+  const peaks: number[] = []
+  for (let y = 0; y < mh; y++) {
+    for (let x = 0; x < mw; x++) {
+      const i = y * mw + x
+      const v = scores[i]
+      if (v <= 0.2) continue
+      let isMax = true
+      for (let dy = -1; dy <= 1 && isMax; dy++) {
+        const yy = y + dy
+        if (yy < 0 || yy >= mh) continue
+        for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx
+          if ((dx || dy) && xx >= 0 && xx < mw && scores[yy * mw + xx] > v) {
+            isMax = false
+            break
+          }
+        }
+      }
+      if (isMax) peaks.push(i)
+    }
+  }
+  peaks.sort((a, b) => scores[b] - scores[a])
   const candidates: { x: number; y: number }[] = []
   const rx = Math.max(1, Math.floor(tw / 2))
   const ry = Math.max(1, Math.floor(th / 2))
-  for (let k = 0; k < topK; k++) {
-    let best = -Infinity
-    let bi = -1
-    for (let i = 0; i < scores.length; i++) {
-      if (scores[i] > best) {
-        best = scores[i]
-        bi = i
-      }
-    }
-    if (bi < 0 || best <= 0.2) break
-    const cx = bi % mw
-    const cy = Math.floor(bi / mw)
+  for (const i of peaks) {
+    const cx = i % mw
+    const cy = Math.floor(i / mw)
+    if (candidates.some((c) => Math.abs(c.x - cx) <= rx && Math.abs(c.y - cy) <= ry)) continue
     candidates.push({ x: cx, y: cy })
-    for (let y = Math.max(0, cy - ry); y <= Math.min(mh - 1, cy + ry); y++) {
-      for (let x = Math.max(0, cx - rx); x <= Math.min(mw - 1, cx + rx); x++) scores[y * mw + x] = -Infinity
-    }
+    if (candidates.length >= topK) break
   }
   if (!candidates.length) return null
 
-  const planes = toPlanes(region)
+  const planes = region.planes()
   let best: MatchResult | null = null
   const r = s + 1
   for (const c of candidates) {
@@ -266,14 +313,17 @@ export function prepareShape(img: Rgba, mask: Uint8Array): PreparedShape {
 
 const COLOR_TOL = 48
 
-/** 미니맵 플레이어 점 색: 노랑(본인), 빨강(다른 사람), 하늘색(길드원), 초록(파티) */
+/**
+ * 미니맵 플레이어 점 색(실제 게임 화면에서 측정): 노랑(본인), 칙칙한 분홍빨강(다른 사람).
+ * 하늘색(길드원), 초록(파티)은 일반적인 값.
+ */
 export const PLAYER_DOT_COLORS: readonly (readonly [number, number, number])[] = [
-  [255, 230, 0],
-  [255, 40, 40],
+  [230, 250, 80],
+  [150, 65, 95],
   [80, 220, 255],
   [60, 230, 60],
 ]
-const DOT_TOL = 70
+const DOT_TOL = 45
 
 function nearDot(r: number, g: number, b: number): boolean {
   for (const c of PLAYER_DOT_COLORS) {

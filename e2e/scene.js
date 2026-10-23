@@ -27,7 +27,7 @@
   const scene = { janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900] }
   window.__scene = scene
   function drawText(g, text, x, y, big = false) {
-    g.font = big ? 'bold 19px monospace' : 'bold 13px monospace'; g.textBaseline = 'top'; g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#fff'
+    g.font = big ? 'bold 19px monospace' : 'bold 13px monospace'; g.textBaseline = 'top'; g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#e1e65f' // 메이플 숫자처럼 검은 테두리의 노란 글자
     const step = big ? 13 : 9
     ;[...text].forEach((ch, i) => { g.strokeText(ch, x + i * step, y); g.fillText(ch, x + i * step, y) })
   }

@@ -2,18 +2,19 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Capture } from './app/capture'
 import { Engine, RUNE_ID, type EngineSnapshot } from './app/engine'
 import { beep, speak, unlockAudio } from './app/sound'
-import { exportSettings, useSettings } from './app/store'
+import { exportSettings, migrate, useSettings } from './app/store'
 import { decodePng, rgbaToDataUrl } from './app/templates'
 import {
   newTimedAlert,
-  profileKey,
+  resolveProfile,
   type Regions,
   type Settings,
   type TemplateData,
   type Templates,
   type TimedGroup,
 } from './config'
-import { emptyBank, findThreshold, learn, learnedChars, segment, type DigitBank } from './core/digits'
+import { emptyBank, findRule, learn, learnedChars, segment, type DigitBank } from './core/digits'
+import { TextRuleControl } from './components/TextRuleControl'
 import { cropRgba, type Rect, type Rgba } from './core/image'
 import type { TargetSpec } from './detector'
 import { RuneRow, TimedRow } from './components/Rows'
@@ -40,7 +41,7 @@ export default function App() {
   const [teach, setTeach] = useState<{ id: string; crop: Rgba } | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  const profile = frame ? profileKey(frame.w, frame.h) : null
+  const profile = frame ? resolveProfile(settings, frame.w, frame.h) : null
   const bank = bankOf(settings, profile)
 
   const [engine] = useState(() => new Engine(settings))
@@ -133,6 +134,7 @@ export default function App() {
           method: 'shape',
           threshold: cfg.runeRatio,
           intervalMs: cfg.runeCheckSec * 1000,
+          withinMinimap: true,
         })
       }
       if (cancelled) return
@@ -245,7 +247,9 @@ export default function App() {
         </div>
         {profile && (
           <p className="muted small">
-            프로필 <b>{profile}</b> — 아이콘·숫자 학습은 해상도별로 따로 저장됩니다.
+            프로필 <b>{profile}</b>
+            {frame && profile !== `${frame.w}x${frame.h}` && ` (공유 화면 ${frame.w}x${frame.h}에 가장 가까운 프로필)`} —
+            아이콘·숫자 학습은 해상도별로 따로 저장됩니다.
           </p>
         )}
         {error && <p className="error">{error}</p>}
@@ -349,20 +353,11 @@ export default function App() {
         </div>
         <p className="small">
           학습된 글자: <b>{learnedChars(bank).join(' ') || '없음'}</b>{' '}
-          <span className="muted">— 0~9와 ‘:’가 모두 있어야 남은 시간을 읽을 수 있습니다.</span>
+          <span className="muted">— 0~9가 모두 있어야 남은 시간을 읽을 수 있습니다. (‘:’는 자동)</span>
         </p>
         {profile && (
           <div className="inline">
-            <label>
-              밝기 기준 {bank.threshold}
-              <input
-                type="range"
-                min={80}
-                max={250}
-                value={bank.threshold}
-                onChange={(e) => update((s) => withBank(s, profile, (b) => ({ ...b, threshold: Number(e.target.value) })))}
-              />
-            </label>
+            <TextRuleControl rule={bank} onChange={(patch) => update((s) => withBank(s, profile, (b) => ({ ...b, ...patch })))} />
             <button
               className="ghost"
               onClick={() => confirm('이 해상도의 숫자 학습을 모두 지울까요?') && update((s) => withBank(s, profile, (b) => ({ ...b, samples: [] })))}
@@ -390,7 +385,7 @@ export default function App() {
           snapshot={editor.snapshot}
           withDigits={editor.withDigits}
           bank={bank}
-          onBankThreshold={(v) => profile && update((s) => withBank(s, profile, (b) => ({ ...b, threshold: v })))}
+          onBankRule={(patch) => profile && update((s) => withBank(s, profile, (b) => ({ ...b, ...patch })))}
           onSave={saveEditor}
           onClose={() => setEditor(null)}
         />
@@ -410,17 +405,17 @@ export default function App() {
 
 function TeachDialog(p: { crop: Rgba; bank: DigitBank; onLearn: (text: string) => void; onClose: () => void }) {
   const [text, setText] = useState('')
-  const glyphs = segment(p.crop, p.bank.threshold).length
+  const glyphs = segment(p.crop, p.bank).length
   const typed = [...text.replace(/\s+/g, '')].length
-  // 처음 학습할 때는 밝기 기준을 자동으로 맞출 수 있다.
-  const auto = typed > 0 && typed !== glyphs && !p.bank.samples.length && findThreshold(p.crop, typed) !== null
+  // 처음 학습할 때는 글자 판정 기준을 자동으로 맞출 수 있다.
+  const auto = typed > 0 && typed !== glyphs && !p.bank.samples.length && findRule(p.crop, typed, p.bank) !== null
   return (
     <div className="modal-backdrop" onClick={p.onClose}>
       <div className="modal small-modal" onClick={(e) => e.stopPropagation()}>
         <h3>숫자 가르치기</h3>
         <img className="pixel teach" src={rgbaToDataUrl(p.crop, 8)} alt="" />
         <p className="small">
-          그림에 보이는 숫자를 그대로 입력하세요. (분리된 글자 {glyphs}개{auto ? ' → 밝기 기준 자동 조정' : ''})
+          그림에 보이는 숫자를 그대로 입력하세요. (분리된 글자 {glyphs}개{auto ? ' → 판정 기준 자동 조정' : ''})
         </p>
         <input autoFocus value={text} placeholder="예: 1:07" onChange={(e) => setText(e.target.value)} />
         <div className="modal-foot">
@@ -528,7 +523,7 @@ function SettingsCard(p: {
             const f = e.target.files?.[0]
             if (!f) return
             try {
-              p.replace({ ...s, ...(JSON.parse(await f.text()) as Settings) })
+              p.replace(migrate(JSON.parse(await f.text()) as Partial<Settings>))
             } catch {
               alert('설정 파일을 읽지 못했습니다.')
             }

@@ -29,11 +29,13 @@ it('1920x1080 프레임 전체 감지가 충분히 빠르다', () => {
       },
     ],
   })
+  // 한 프레임의 전체 탐색 수가 제한되므로 처음 몇 프레임(4fps 기준 1초 안)에 걸쳐 모두 찾는다.
   let t0 = performance.now()
-  const first = d.detect(frame)
+  let first = d.detect(frame, 0)
+  for (let k = 1; k < 5; k++) first = d.detect(frame, k * 250)
   const cold = performance.now() - t0
   t0 = performance.now()
-  d.detect(frame)
+  d.detect(frame, 1500)
   const warm = performance.now() - t0
   console.log(`cold ${cold.toFixed(0)}ms, warm ${warm.toFixed(0)}ms`)
   expect(first.every((r) => r.found)).toBe(true)

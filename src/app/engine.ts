@@ -12,11 +12,15 @@ export interface TargetStatus {
   found: boolean
   score: number
   variant: number
+  minimap?: { x: number; y: number; w: number; h: number } | null
   text: string | null
   remainingSec: number | null
   digitCrop: Rgba | null
+  /** 최근 5초 안의 마지막 이벤트(갱신됨 등 표시용) */
   lastEvent: string | null
 }
+
+const EVENT_SHOW_MS = 5000
 
 export interface EngineSnapshot {
   at: number
@@ -37,9 +41,20 @@ function timedOptions(a: TimedAlert): TimedOptions {
 }
 
 export function alertText(a: TimedAlert, kind: 'alert' | 'expired'): string {
-  const name = a.speech || a.name
-  return kind === 'alert' ? `${name} ${a.alertBeforeSec}초 전` : `${name} 종료`
+  return `${a.speech || a.name} ${alertSuffix(a, kind)}`
 }
+
+function alertSuffix(a: TimedAlert, kind: 'alert' | 'expired'): string {
+  return kind === 'alert' ? `${a.alertBeforeSec}초 전` : '종료'
+}
+
+/** 같이 먹은 도핑 여러 개가 동시에 끝날 때 알림을 한 문장으로 묶는다. */
+export function groupText(names: string[], suffix: string): string {
+  if (names.length <= 2) return `${names.join(', ')} ${suffix}`
+  return `${names[0]} 외 ${names.length - 1}개 ${suffix}`
+}
+
+const BUFF_GROUP_MS = 1200
 
 // 플레이어가 룬 위에 서서 잠깐 다 가려도 "사라짐"으로 보지 않도록 몇 번 연속 놓쳐야 사라진 것으로 본다.
 function runeOptions(s: Settings) {
@@ -50,8 +65,10 @@ export class Engine {
   private settings: Settings
   private timed = new Map<string, TimedTracker>()
   private rune: PresenceTracker
-  private lastEvents = new Map<string, string>()
+  private lastEvents = new Map<string, { ev: string; at: number }>()
   snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {} }
+  private pending: { suffix: string; names: string[]; pattern?: number[] }[] = []
+  private flushTimer: ReturnType<typeof setTimeout> | null = null
   private onChange: (s: EngineSnapshot) => void = () => {}
   private onLog: (line: string) => void = () => {}
 
@@ -90,6 +107,31 @@ export class Engine {
     fireAlert(text, { volume: s.volume, speech: s.speechEnabled, desktop: s.notifyEnabled }, pattern)
   }
 
+  /** 버프 알림은 잠깐 모았다가 같은 내용끼리 한 번에 알린다. */
+  private buffAlert(a: TimedAlert, kind: 'alert' | 'expired', pattern?: number[]) {
+    const suffix = alertSuffix(a, kind)
+    let p = this.pending.find((x) => x.suffix === suffix)
+    if (!p) {
+      p = { suffix, names: [], pattern }
+      this.pending.push(p)
+    }
+    const name = a.speech || a.name
+    if (!p.names.includes(name)) p.names.push(name)
+    this.flushTimer ??= setTimeout(() => this.flush(), BUFF_GROUP_MS)
+  }
+
+  private flush() {
+    this.flushTimer = null
+    const list = this.pending
+    this.pending = []
+    for (const p of list) this.alert(groupText(p.names, p.suffix), p.pattern)
+  }
+
+  private recentEvent(id: string, now: number): string | null {
+    const e = this.lastEvents.get(id)
+    return e && now - e.at <= EVENT_SHOW_MS ? e.ev : null
+  }
+
   handle(detections: Detection[], frameMs: number, now = Date.now()) {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
@@ -98,9 +140,9 @@ export class Engine {
         if (!this.settings.rune.enabled) continue
         for (const ev of this.rune.update(d.found, now)) {
           if (ev === 'alert') this.alert(this.settings.rune.speech || '룬', [660, 990, 1320])
-          this.lastEvents.set(d.id, ev)
+          this.lastEvents.set(d.id, { ev, at: now })
         }
-        targets[d.id] = { ...base(d), remainingSec: null, lastEvent: this.lastEvents.get(d.id) ?? null }
+        targets[d.id] = { ...base(d), remainingSec: null, lastEvent: this.recentEvent(d.id, now) }
         continue
       }
       const a = this.settings.timed.find((x) => x.id === d.id)
@@ -109,14 +151,17 @@ export class Engine {
       const reliable = d.text !== null && d.worst !== null && d.worst <= MAX_GLYPH_DISTANCE
       const remaining = reliable ? parseRemaining(d.text!, a.colonUnit, a.plainUnit) : null
       for (const ev of tracker.update({ found: d.found, remainingSec: remaining }, now)) {
-        if (ev === 'alert') this.alert(alertText(a, 'alert'))
-        if (ev === 'expired') this.alert(alertText(a, 'expired'), [1175, 880])
-        this.lastEvents.set(d.id, ev)
+        const pattern = ev === 'expired' ? [1175, 880] : undefined
+        if (ev === 'alert' || ev === 'expired') {
+          if (a.group === 'buff') this.buffAlert(a, ev, pattern)
+          else this.alert(alertText(a, ev), pattern)
+        }
+        this.lastEvents.set(d.id, { ev, at: now })
       }
       targets[d.id] = {
         ...base(d),
         remainingSec: tracker.status(now).remainingSec,
-        lastEvent: this.lastEvents.get(d.id) ?? null,
+        lastEvent: this.recentEvent(d.id, now),
       }
     }
     this.snapshot = { at: now, frameMs, targets }
@@ -125,5 +170,5 @@ export class Engine {
 }
 
 function base(d: Detection) {
-  return { found: d.found, score: d.score, variant: d.variant, text: d.text, digitCrop: d.digitCrop }
+  return { found: d.found, score: d.score, variant: d.variant, text: d.text, digitCrop: d.digitCrop, minimap: d.minimap }
 }

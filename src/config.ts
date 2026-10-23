@@ -75,7 +75,8 @@ export interface Settings {
 export const DEFAULT_REGIONS: Regions = {
   skill: { x: 0, y: 0, w: 1, h: 1 }, // 즐겨찾기 버프 아이콘은 어디든 옮길 수 있어 전체 화면
   buff: { x: 0.5, y: 0, w: 0.5, h: 0.3 }, // 우상단
-  rune: { x: 0, y: 0, w: 0.35, h: 0.45 }, // 좌상단 미니맵
+  // 이 영역에서 미니맵 창(밝은 테두리)을 찾아 그 안만 본다. 미니맵이 큰 맵도 들어오도록 넉넉하게.
+  rune: { x: 0, y: 0, w: 0.35, h: 0.45 },
 }
 
 export function newTimedAlert(group: TimedGroup, name: string): TimedAlert {
@@ -119,4 +120,27 @@ export function normalizeTemplates(t: Record<string, TemplateData | TemplateData
   const out: Templates = {}
   for (const [k, v] of Object.entries(t ?? {})) out[k] = Array.isArray(v) ? v : [v]
   return out
+}
+
+/**
+ * 화면 크기에 맞는 프로필을 고른다. 정확히 같은 크기가 없으면 ±64px 안의 가장 가까운 프로필을 쓴다
+ * (창 공유 시 제목 표시줄/테두리 때문에 1920x1080이 1922x1112처럼 잡히는 경우).
+ */
+export function resolveProfile(s: Settings, width: number, height: number): string {
+  const exact = profileKey(width, height)
+  const keys = new Set<string>(Object.keys(s.profiles))
+  for (const a of s.timed) for (const [k, v] of Object.entries(a.templates)) if (v.length) keys.add(k)
+  for (const [k, v] of Object.entries(s.rune.templates)) if (v.length) keys.add(k)
+  if (keys.has(exact)) return exact
+  let best: string | null = null
+  let bestD = Infinity
+  for (const k of keys) {
+    const [w, h] = k.split('x').map(Number)
+    const d = Math.abs(w - width) + Math.abs(h - height)
+    if (Math.abs(w - width) <= 64 && Math.abs(h - height) <= 64 && d < bestD) {
+      best = k
+      bestD = d
+    }
+  }
+  return best ?? exact
 }

@@ -40,9 +40,29 @@ describe('TimedTracker (숫자 인식)', () => {
     expect(ev).toContain('20:alert')
     feed(23, 60) // 재사용
     feed(24, 59)
-    expect(ev).toContain('24:refreshed')
-    for (let s = 25; s <= 75; s++) feed(s, 83 - s)
+    feed(25, 58)
+    expect(ev).toContain('25:refreshed')
+    for (let s = 26; s <= 75; s++) feed(s, 83 - s)
     expect(ev.filter((e) => e.endsWith('alert'))).toEqual(['20:alert', '73:alert'])
+  })
+
+  it('같은 오답이 1초 동안 반복돼도(초당 4번 읽기) 갱신으로 보지 않는다', () => {
+    const t = new TimedTracker(opts)
+    const ev: string[] = []
+    const feed = (ms: number, r: number) => ev.push(...t.update({ found: true, remainingSec: r }, ms).map((e) => `${ms}:${e}`))
+    // 진짜: 25초부터 감소. 12초 남았을 때 '12'를 '16'으로 1초 동안 잘못 읽음
+    for (let ms = 0; ms <= 20000; ms += 250) {
+      const real = Math.floor(25 - ms / 1000)
+      feed(ms, real === 12 ? 16 : real)
+    }
+    expect(ev.filter((e) => e.endsWith('refreshed'))).toEqual([])
+    expect(ev.filter((e) => e.endsWith('alert'))).toHaveLength(1)
+  })
+
+  it('멈춘 숫자(같은 값 계속)는 받아들이지 않는다', () => {
+    const t = new TimedTracker(opts)
+    for (let ms = 0; ms <= 5000; ms += 250) t.update({ found: true, remainingSec: 6 }, ms)
+    expect(t.status(5000).remainingSec).toBeNull()
   })
 
   it('아이콘이 사라지면 만료 알림', () => {

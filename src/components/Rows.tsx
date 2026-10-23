@@ -179,6 +179,9 @@ export function RuneRow(p: {
         <div className="row-sub">
           <span className={st.cls}>{st.label}</span>
           {p.status?.found && <span className="warn">룬 있음!</span>}
+          {p.active && p.status && (
+            <span className="muted">{p.status.minimap ? '미니맵 인식됨' : '미니맵 못 찾음 — 탐색 영역 전체 검사'}</span>
+          )}
         </div>
       </div>
       <div className="cell">

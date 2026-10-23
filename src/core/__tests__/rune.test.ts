@@ -39,8 +39,8 @@ function drawRune(img: Rgba, x0: number, y0: number) {
   }
 }
 
-const YELLOW = [255, 230, 0]
-const RED = [255, 40, 40]
+const YELLOW = [230, 250, 80]
+const RED = [150, 65, 95]
 const CYAN = [80, 220, 255]
 
 describe('룬 탐지 (맵 무관, 가림 허용)', () => {

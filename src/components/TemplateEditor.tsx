@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { TemplateData } from '../config'
-import { binarize, findThreshold, segment, type DigitBank } from '../core/digits'
+import { binarize, findRule, ruleLabel, segment, type DigitBank, type TextRule } from '../core/digits'
+import { TextRuleControl } from './TextRuleControl'
 import type { Rect } from '../core/image'
 import { cropToPng, cropToRgba } from '../app/templates'
 import { foregroundMask } from '../core/match'
@@ -19,7 +20,7 @@ interface Props {
   snapshot: HTMLCanvasElement
   withDigits: boolean
   bank: DigitBank
-  onBankThreshold: (v: number) => void
+  onBankRule: (patch: Partial<TextRule>) => void
   onSave: (r: EditorResult) => void
   onClose: () => void
 }
@@ -133,8 +134,8 @@ export function TemplateEditor(p: Props) {
   const digitPreview = useMemo(() => {
     if (!digits) return null
     const img = cropToRgba(snap, digits)
-    const bin = binarize(img, p.bank.threshold)
-    const glyphs = segment(img, p.bank.threshold).length
+    const bin = binarize(img, p.bank)
+    const glyphs = segment(img, p.bank).length
     const c = document.createElement('canvas')
     const z = 6
     c.width = img.width * z
@@ -149,7 +150,7 @@ export function TemplateEditor(p: Props) {
       }
     }
     return { url: c.toDataURL(), glyphs }
-  }, [snap, digits, p.bank.threshold])
+  }, [snap, digits, p.bank])
 
   // 룬: 비교에 쓰일 픽셀만 밝게, 배경(무시)은 어둡게 보여준다.
   const maskPreview = useMemo(() => {
@@ -189,7 +190,7 @@ export function TemplateEditor(p: Props) {
   const typed = [...learnText.replace(/\s+/g, '')].length
   const auto =
     !!digits && typed > 0 && typed !== digitPreview?.glyphs && !p.bank.samples.length
-      ? findThreshold(cropToRgba(snap, digits), typed)
+      ? findRule(cropToRgba(snap, digits), typed, p.bank)
       : null
 
   return (
@@ -276,16 +277,7 @@ export function TemplateEditor(p: Props) {
           <div className="learn">
             <img src={digitPreview.url} alt="숫자 미리보기" className="pixel" />
             <div className="learn-form">
-              <label>
-                밝기 기준 {p.bank.threshold}
-                <input
-                  type="range"
-                  min={80}
-                  max={250}
-                  value={p.bank.threshold}
-                  onChange={(e) => p.onBankThreshold(Number(e.target.value))}
-                />
-              </label>
+              <TextRuleControl rule={p.bank} onChange={p.onBankRule} />
               <small>아래 흑백 그림에서 숫자만 흰색으로 또렷하게 보이도록 조절하세요.</small>
               <label>
                 보이는 숫자
@@ -293,7 +285,7 @@ export function TemplateEditor(p: Props) {
               </label>
               <small className={learnText && typed !== digitPreview.glyphs && auto === null ? 'warn' : ''}>
                 분리된 글자 {digitPreview.glyphs}개{learnText ? ` / 입력 ${typed}자` : ''}
-                {auto !== null && ` → 저장 시 밝기 기준 ${auto}로 자동 조정`}
+                {auto !== null && ` → 저장 시 ${ruleLabel({ ...p.bank, ...auto })}로 자동 조정`}
               </small>
             </div>
           </div>

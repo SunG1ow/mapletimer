@@ -28,13 +28,31 @@ export interface TimedStatus {
 }
 
 const TOLERANCE_SEC = 2.5
+/**
+ * 새 시간(처음 잡기/갱신/급변)을 받아들이는 조건: 같은 만료 시각을 가리키는 읽기가 이 시간 이상에 걸쳐
+ * CONFIRM_READS번 이상. 화면 숫자는 1초마다 바뀌고 초당 여러 번 읽으므로, 숫자 하나를 잘못 읽으면
+ * 같은 오답이 1초 동안 반복된다(실측). 진짜 남은 시간은 숫자가 줄어도 만료 시각이 그대로라 이 조건을 통과한다.
+ */
+const CONFIRM_MS = 2000
+const CONFIRM_READS = 3
+/** 후보끼리 같은 만료 시각으로 볼 범위(읽은 값은 내림 표시라 ±0.5초 오차) */
+const CANDIDATE_TOL_MS = 1200
+
+interface Candidate {
+  firstAt: number
+  lastAt: number
+  expires: number // 평균
+  min: number
+  max: number
+  reads: number
+}
 
 export class TimedTracker {
   present = false
   expiresAt: number | null = null
   fired = false
   private lastSeen = 0
-  private candidate: { at: number; expires: number } | null = null
+  private candidates: Candidate[] = []
   private opts: TimedOptions
 
   constructor(opts: TimedOptions) {
@@ -51,7 +69,7 @@ export class TimedTracker {
     this.present = false
     this.expiresAt = null
     this.fired = false
-    this.candidate = null
+    this.candidates = []
   }
 
   status(now: number): TimedStatus {
@@ -81,7 +99,7 @@ export class TimedTracker {
       ev.push('disappeared')
       if (o.alertOnExpire) ev.push('expired')
       this.expiresAt = null
-      this.candidate = null
+      this.candidates = []
       this.fired = false
     }
 
@@ -98,21 +116,31 @@ export class TimedTracker {
     const expires = now + (sec + 0.5) * 1000
     if (this.expiresAt !== null && Math.abs(expires - this.expiresAt) <= TOLERANCE_SEC * 1000) {
       this.expiresAt = this.expiresAt * 0.7 + expires * 0.3
-      this.candidate = null
+      this.candidates = []
       return
     }
-    // 처음 읽었거나 예측과 크게 다르면, 연속 두 번 일치할 때만 받아들인다(오인식 방지).
-    if (this.candidate && Math.abs(expires - this.candidate.expires) <= TOLERANCE_SEC * 1000) {
-      const refreshed = this.expiresAt !== null && expires > this.expiresAt
-      this.expiresAt = expires
-      this.candidate = null
-      if (refreshed) {
-        ev.push('refreshed')
-        this.fired = false
-      }
-      return
+    // 처음 읽었거나 예측과 크게 다르면 후보로 모아 두고, 시간에 걸쳐 확인된 것만 받아들인다.
+    this.candidates = this.candidates.filter((c) => now - c.lastAt <= 3000)
+    let c = this.candidates.find((x) => Math.abs(expires - x.expires) <= CANDIDATE_TOL_MS)
+    if (!c) {
+      c = { firstAt: now, lastAt: now, expires, min: expires, max: expires, reads: 0 }
+      this.candidates.push(c)
+      if (this.candidates.length > 3) this.candidates.shift()
     }
-    this.candidate = { at: now, expires }
+    c.expires = (c.expires * c.reads + expires) / (c.reads + 1)
+    c.min = Math.min(c.min, expires)
+    c.max = Math.max(c.max, expires)
+    c.reads++
+    c.lastAt = now
+    // 멈춘 숫자는 시간이 갈수록 만료 시각이 밀리므로 범위가 넓어져 걸러진다.
+    if (c.reads < CONFIRM_READS || now - c.firstAt < CONFIRM_MS || c.max - c.min > CANDIDATE_TOL_MS) return
+
+    const refreshed = this.expiresAt !== null && c.expires > this.expiresAt + TOLERANCE_SEC * 1000
+    this.expiresAt = c.expires
+    this.candidates = []
+    if (refreshed) ev.push('refreshed')
+    // 다시 알림 시점보다 넉넉히 남았을 때만 알림을 새로 준비한다(이미 지난 시점에서 또 울리지 않게).
+    if (this.expiresAt - now > (this.opts.alertBeforeSec + 1.5) * 1000) this.fired = false
   }
 }
 
