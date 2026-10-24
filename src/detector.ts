@@ -2,6 +2,7 @@
 
 import { read, type DigitBank } from './core/digits'
 import { cropRgba, fracToRect, type Rect, type Rgba } from './core/image'
+import { ExpWatcher, type ExpChange } from './core/expwatch'
 import { findMinimap, hasSelfDot } from './core/minimap'
 import {
   findShape,
@@ -60,6 +61,8 @@ const STICKY_MS = 5000
 export interface DetectorConfig {
   digitBank: DigitBank
   targets: TargetSpec[]
+  /** 사냥 멈춤 감지용 경험치 띠(화면 비율). 없으면 감시하지 않는다 */
+  expRegion?: Rect | null
 }
 
 export interface Detection {
@@ -98,8 +101,14 @@ export class Detector {
   private targets: Target[] = []
   private bank: DigitBank = { threshold: 220, samples: [] }
 
+  private expRegion: Rect | null = null
+  private exp = new ExpWatcher()
+
   configure(cfg: DetectorConfig) {
     this.bank = cfg.digitBank
+    const er = cfg.expRegion ?? null
+    if (JSON.stringify(er) !== JSON.stringify(this.expRegion)) this.exp.reset()
+    this.expRegion = er
     this.targets = cfg.targets.map((t) => ({
       ...t,
       prepared: t.variants.map((v) =>
@@ -112,6 +121,12 @@ export class Detector {
       lastRun: -Infinity,
       lastFullSearch: -Infinity,
     }))
+  }
+
+  /** 경험치 띠가 직전 기준과 달라졌는지(사냥 멈춤 감지). 영역이 없으면 null. */
+  watchExp(frame: Rgba): ExpChange | null {
+    if (!this.expRegion) return null
+    return this.exp.update(cropRgba(frame, fracToRect(this.expRegion, frame.width, frame.height)))
   }
 
   /** 이번 프레임에 검사한 대상의 결과만 돌려준다(간격이 남은 대상은 빠진다). */

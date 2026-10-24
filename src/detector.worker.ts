@@ -1,5 +1,6 @@
 // 화면 프레임을 받아 감지를 돌리는 워커. 탭이 백그라운드여도 워커는 타이머 제한을 덜 받는다.
 
+import type { ExpChange } from './core/expwatch'
 import { Detector, type Detection, type DetectorConfig } from './detector'
 import type { Rgba } from './core/image'
 
@@ -10,7 +11,15 @@ export type WorkerIn =
   | { type: 'stop' }
 
 export type WorkerOut =
-  | { type: 'result'; at: number; width: number; height: number; ms: number; detections: Detection[] }
+  | {
+      type: 'result'
+      at: number
+      width: number
+      height: number
+      ms: number
+      detections: Detection[]
+      exp: ExpChange | null
+    }
   | { type: 'size'; width: number; height: number }
   | { type: 'error'; message: string }
 
@@ -48,9 +57,10 @@ function process(src: VideoFrame | ImageBitmap, w: number, h: number) {
   const t0 = performance.now()
   const frame = grab(src, w, h)
   const detections = detector.detect(frame, t0)
+  const exp = detector.watchExp(frame)
   const transfer = detections.flatMap((d) => (d.digitCrop ? [d.digitCrop.data.buffer] : []))
   post(
-    { type: 'result', at: Date.now(), width: w, height: h, ms: performance.now() - t0, detections },
+    { type: 'result', at: Date.now(), width: w, height: h, ms: performance.now() - t0, detections, exp },
     transfer as Transferable[],
   )
 }

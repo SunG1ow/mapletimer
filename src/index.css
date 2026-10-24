@@ -108,3 +108,4 @@ canvas.zoom { display: block; cursor: crosshair; }
 }
 .thumb-actions { display: flex; flex-direction: column; align-items: center; font-size: 11px; }
 .thumb-actions .link { font-size: 11px; }
+.exp-thumb { background: linear-gradient(90deg, #c8e61e 60%, #222 60%); color: #000; font-weight: 700; border-style: solid; }

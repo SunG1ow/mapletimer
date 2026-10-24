@@ -51,6 +51,20 @@ export interface RuneAlert {
   speech: string
 }
 
+/** 사냥 멈춤 알림: 맨 아래 경험치 바/숫자 띠가 일정 시간 안 바뀌면 알림 */
+export interface HuntStopAlert {
+  enabled: boolean
+  /** 이 시간(초) 동안 경험치 변화가 없으면 멈춘 것으로 본다 */
+  stopSec: number
+  /** 멈춘 동안 반복 알림 간격(초) */
+  repeatSec: number
+  speech: string
+  /** 감시 영역(화면 비율). 노란 경험치 바와 경험치 숫자가 있는 맨 아래 띠, 오른쪽 퀵슬롯은 제외 */
+  region: Rect
+}
+
+export const DEFAULT_HUNT_REGION: Rect = { x: 0, y: 0.987, w: 0.68, h: 0.013 }
+
 export interface Regions {
   skill: Rect
   buff: Rect
@@ -71,6 +85,7 @@ export interface Settings {
   regions: Regions // 화면 비율(0..1)
   timed: TimedAlert[]
   rune: RuneAlert
+  huntStop: HuntStopAlert
   profiles: Record<string, Profile>
 }
 
@@ -109,6 +124,7 @@ export function defaultSettings(): Settings {
     regions: DEFAULT_REGIONS,
     timed: [newTimedAlert('skill', '솔 야누스 : 새벽')],
     rune: { enabled: true, templates: {}, repeatSec: 30, checkSec: 1, matchRatio: 0.65, speech: '룬' },
+    huntStop: { enabled: true, stopSec: 60, repeatSec: 15, speech: '사냥 멈춤', region: DEFAULT_HUNT_REGION },
     profiles: {},
   }
 }

@@ -27,7 +27,8 @@
     g.fillStyle = '#e6e6e6'; g.fillRect(18, 58, 304, 164); g.fillStyle = '#000'; g.fillRect(20, 60, 300, 160)
     g.fillStyle = '#e6fa50'; g.beginPath(); g.arc(80, 180, 4, 0, 7); g.fill() }
   // buffStyle: 'small' = 하단 m:ss, 'big' = 가운데 큰 ss (1분 미만), 'blink' = 숫자 없이 깜빡임 (5초 이하)
-  const scene = { janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900] }
+  // exp: 맨 아래 경험치 숫자. expRunning이면 1초마다 오른다(사냥 중).
+  const scene = { exp: 63875526522732, expRunning: false, expTick: 0,  janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900] }
   window.__scene = scene
   function drawText(g, text, x, y, big = false) {
     g.font = big ? 'bold 19px monospace' : 'bold 13px monospace'; g.textBaseline = 'top'; g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#e1e65f' // 메이플 숫자처럼 검은 테두리의 노란 글자
@@ -60,6 +61,12 @@
       else if (scene.buffStyle === 'big') drawText(g, scene.buffText, 1803, 37, true)
     }
     if (scene.rune) g.drawImage(rune, 140, 120)
+    // 맨 아래: 노란 경험치 바 + 경험치 숫자(메이플처럼)
+    if (scene.expRunning && now - scene.expTick > 1000) { scene.exp += 1234567; scene.expTick = now }
+    g.fillStyle = '#1e1e22'; g.fillRect(0, 1066, W, 14)
+    g.fillStyle = '#c8e628'; g.fillRect(0, 1070, 344, 8)
+    g.font = '11px monospace'; g.textBaseline = 'top'; g.fillStyle = '#fff'
+    g.fillText(`${scene.exp.toLocaleString('en-US').replace(/,/g, '.')} [17.937%]`, 880, 1068)
   }
   setInterval(draw, 50); draw()
   window.__templates = {

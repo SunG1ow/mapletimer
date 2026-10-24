@@ -244,3 +244,57 @@ export class PresenceTracker {
     return ev
   }
 }
+
+export interface HuntStopOptions {
+  stopSec: number
+  repeatSec: number
+}
+
+export type HuntStopEvent = 'stopped' | 'resumed'
+
+/** 경험치 변화가 stopSec 동안 없으면 알리고, 다시 변할 때까지 repeatSec마다 반복한다. */
+export class HuntStopTracker {
+  private lastChange: number | null = null
+  private lastAlert: number | null = null
+  private opts: HuntStopOptions
+
+  constructor(opts: HuntStopOptions) {
+    this.opts = opts
+  }
+
+  setOptions(opts: HuntStopOptions) {
+    this.opts = opts
+  }
+
+  reset() {
+    this.lastChange = null
+    this.lastAlert = null
+  }
+
+  get stopped() {
+    return this.lastAlert !== null
+  }
+
+  /** 마지막 경험치 변화 후 지난 시간(초) */
+  idleSec(now: number): number | null {
+    return this.lastChange === null ? null : (now - this.lastChange) / 1000
+  }
+
+  update(changed: boolean, now: number): HuntStopEvent[] {
+    const ev: HuntStopEvent[] = []
+    // 처음 보기 시작한 시점부터 잰다(공유 시작 직후 바로 울리지 않게).
+    if (this.lastChange === null || changed) {
+      if (changed && this.lastAlert !== null) ev.push('resumed')
+      this.lastChange = now
+      this.lastAlert = null
+      return ev
+    }
+    const idle = now - this.lastChange
+    if (idle < this.opts.stopSec * 1000) return ev
+    if (this.lastAlert === null || now - this.lastAlert >= this.opts.repeatSec * 1000) {
+      this.lastAlert = now
+      ev.push('stopped')
+    }
+    return ev
+  }
+}

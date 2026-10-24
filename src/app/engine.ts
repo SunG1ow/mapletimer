@@ -4,7 +4,8 @@ import type { Settings, TimedAlert } from '../config'
 import { MAX_GLYPH_DISTANCE } from '../core/digits'
 import type { Rgba } from '../core/image'
 import { parseRemaining } from '../core/time'
-import { PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
+import type { ExpChange } from '../core/expwatch'
+import { HuntStopTracker, PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
 import type { Detection } from '../detector'
 import { fireAlert } from './sound'
 
@@ -24,10 +25,19 @@ export interface TargetStatus {
 
 const EVENT_SHOW_MS = 5000
 
+export interface HuntStatus {
+  /** 마지막 경험치 변화 후 지난 시간(초) */
+  idleSec: number | null
+  stopped: boolean
+  /** 이번 프레임에 바뀐 픽셀 수(확인용) */
+  diffPx: number
+}
+
 export interface EngineSnapshot {
   at: number
   frameMs: number
   targets: Record<string, TargetStatus>
+  hunt: HuntStatus | null
 }
 
 export const RUNE_ID = 'rune'
@@ -68,7 +78,8 @@ export class Engine {
   private timed = new Map<string, TimedTracker>()
   private rune: PresenceTracker
   private lastEvents = new Map<string, { ev: string; at: number }>()
-  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {} }
+  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null }
+  private hunt = new HuntStopTracker({ stopSec: 60, repeatSec: 15 })
   private pending: { suffix: string; names: string[]; pattern?: number[] }[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private onChange: (s: EngineSnapshot) => void = () => {}
@@ -95,11 +106,14 @@ export class Engine {
       else this.timed.set(a.id, new TimedTracker(timedOptions(a)))
     }
     this.rune.setOptions(runeOptions(s))
+    this.hunt.setOptions({ stopSec: s.huntStop.stopSec, repeatSec: s.huntStop.repeatSec })
+    if (!s.huntStop.enabled) this.hunt.reset()
   }
 
   reset() {
     this.timed.forEach((t) => t.reset())
     this.rune.reset()
+    this.hunt.reset()
   }
 
   private alert(text: string, pattern?: number[]) {
@@ -134,7 +148,7 @@ export class Engine {
     return e && now - e.at <= EVENT_SHOW_MS ? e.ev : null
   }
 
-  handle(detections: Detection[], frameMs: number, now = Date.now()) {
+  handle(detections: Detection[], frameMs: number, now = Date.now(), exp: ExpChange | null = null) {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
     for (const d of detections) {
@@ -173,7 +187,15 @@ export class Engine {
         covered: st.lost,
       }
     }
-    this.snapshot = { at: now, frameMs, targets }
+    let hunt: HuntStatus | null = null
+    if (exp && this.settings.huntStop.enabled) {
+      for (const ev of this.hunt.update(exp.changed, now)) {
+        if (ev === 'stopped') this.alert(this.settings.huntStop.speech || '사냥 멈춤', [523, 392, 523, 392])
+        else this.onLog('사냥 재개')
+      }
+      hunt = { idleSec: this.hunt.idleSec(now), stopped: this.hunt.stopped, diffPx: exp.diffPx }
+    }
+    this.snapshot = { at: now, frameMs, targets, hunt }
     this.onChange(this.snapshot)
   }
 }

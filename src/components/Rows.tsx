@@ -1,7 +1,14 @@
 // 알림 한 줄씩의 UI.
 
-import { ALERT_BEFORE_MAX, ALERT_BEFORE_MIN, type RuneAlert, type TemplateData, type TimedAlert } from '../config'
-import type { TargetStatus } from '../app/engine'
+import {
+  ALERT_BEFORE_MAX,
+  ALERT_BEFORE_MIN,
+  type HuntStopAlert,
+  type RuneAlert,
+  type TemplateData,
+  type TimedAlert,
+} from '../config'
+import type { HuntStatus, TargetStatus } from '../app/engine'
 import { formatSec } from '../core/time'
 
 function Toggle(p: { on: boolean; onChange: (v: boolean) => void }) {
@@ -209,6 +216,57 @@ export function RuneRow(p: {
       <div className="cell">
         <label>음성</label>
         <input className="speech" value={r.speech} onChange={(e) => set({ speech: e.target.value })} />
+      </div>
+    </div>
+  )
+}
+
+export function HuntRow(p: {
+  hunt: HuntStopAlert
+  status: HuntStatus | null
+  active: boolean
+  onChange: (h: HuntStopAlert) => void
+}) {
+  const h = p.hunt
+  const st = p.status
+  const set = (patch: Partial<HuntStopAlert>) => p.onChange({ ...h, ...patch })
+  const idle = st?.idleSec
+  return (
+    <div className={`row ${h.enabled ? '' : 'off'}`}>
+      <Toggle on={h.enabled} onChange={(enabled) => set({ enabled })} />
+      <div className="thumb exp-thumb" title="맨 아래 경험치 바와 숫자 띠">
+        <span>EXP</span>
+      </div>
+      <div className="row-main">
+        <strong>경험치 변화 감시</strong>
+        <div className="row-sub">
+          {!p.active || !h.enabled ? (
+            <span className="muted">대기</span>
+          ) : !st ? (
+            <span className="muted">…</span>
+          ) : st.stopped ? (
+            <span className="warn">사냥 멈춤!</span>
+          ) : (
+            <span className="ok">사냥 중</span>
+          )}
+          {st && <span className="muted">변화 {st.diffPx}px</span>}
+        </div>
+      </div>
+      <div className="cell">
+        <label>마지막 변화</label>
+        <strong className={st?.stopped ? 'warn' : ''}>{idle != null ? `${Math.floor(idle)}초 전` : '--'}</strong>
+      </div>
+      <div className="cell">
+        <label>멈춤 판단</label>
+        <NumberField value={h.stopSec} min={5} max={600} onChange={(stopSec) => set({ stopSec })} suffix="초 동안 변화 없음" />
+      </div>
+      <div className="cell">
+        <label>반복 알림</label>
+        <NumberField value={h.repeatSec} min={3} max={300} onChange={(repeatSec) => set({ repeatSec })} suffix="초마다" />
+      </div>
+      <div className="cell">
+        <label>음성</label>
+        <input className="speech" value={h.speech} onChange={(e) => set({ speech: e.target.value })} />
       </div>
     </div>
   )

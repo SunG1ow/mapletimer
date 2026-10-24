@@ -17,7 +17,7 @@ import { emptyBank, findRule, learn, learnedChars, segment, type DigitBank } fro
 import { TextRuleControl } from './components/TextRuleControl'
 import { cropRgba, type Rect, type Rgba } from './core/image'
 import type { TargetSpec } from './detector'
-import { RuneRow, TimedRow } from './components/Rows'
+import { HuntRow, RuneRow, TimedRow } from './components/Rows'
 import { TemplateEditor, type EditorResult } from './components/TemplateEditor'
 
 type EditorTarget = { id: string; title: string; withDigits: boolean; snapshot: HTMLCanvasElement }
@@ -51,7 +51,7 @@ export default function App() {
     (captureRef.current ??= new Capture({
       onMessage: (m) => {
         if (m.type === 'size') setFrame({ w: m.width, h: m.height })
-        else if (m.type === 'result') engine.handle(m.detections, m.ms, m.at)
+        else if (m.type === 'result') engine.handle(m.detections, m.ms, m.at, m.exp)
         else if (m.type === 'error') setError(m.message)
       },
       onEnded: () => {
@@ -87,6 +87,7 @@ export default function App() {
       th: settings.matchThreshold,
       fps: settings.fps,
       bank,
+      expRegion: settings.huntStop.enabled ? settings.huntStop.region : null,
     })
   }, [settings, profile, bank])
 
@@ -97,6 +98,7 @@ export default function App() {
       rune?: TemplateData[]
       runeRatio: number
       runeCheckSec: number
+      expRegion: Rect | null
       regions: Regions
       th: number
       fps: number
@@ -139,7 +141,11 @@ export default function App() {
         })
       }
       if (cancelled) return
-      captureRef.current?.send({ type: 'config', fps: cfg.fps, config: { digitBank: cfg.bank, targets } })
+      captureRef.current?.send({
+        type: 'config',
+        fps: cfg.fps,
+        config: { digitBank: cfg.bank, targets, expRegion: cfg.expRegion },
+      })
       captureRef.current?.setFps(cfg.fps)
     })()
     return () => {
@@ -334,6 +340,19 @@ export default function App() {
             confirm(`${profile} 룬 모양을 모두 지울까요?`) &&
             update((s) => ({ ...s, rune: { ...s.rune, templates: { ...s.rune.templates, [profile]: [] } } }))
           }
+        />
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>사냥 멈춤 알림</h2>
+          <span className="muted small">맨 아래 경험치 바·숫자가 일정 시간 안 바뀌면 반복해서 알립니다</span>
+        </div>
+        <HuntRow
+          hunt={settings.huntStop}
+          status={snap?.hunt ?? null}
+          active={active}
+          onChange={(huntStop) => update((s) => ({ ...s, huntStop }))}
         />
       </section>
 
