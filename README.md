@@ -18,7 +18,8 @@ npm install
 npm run dev          # http://localhost:5173 에서 사용
 ```
 
-설치 없이 쓰려면 `npm run build:single` → `dist-single/index.html` 파일 하나를 Chrome으로 열면 됩니다.
+설치 없이 쓰려면 **`release/메이플타이머.html`** 을 Chrome으로 열면 됩니다(빌드된 단일 파일, 저장소에 포함).
+맨 위 `index.html`은 개발용 원본이라 직접 열면 안내 문구만 나옵니다. 코드를 고친 뒤 `npm run release`로 다시 만듭니다.
 
 > Chrome(또는 Edge) 권장. Chrome에서는 프레임 처리를 워커에서 하므로 탭이 가려져 있어도 계속 감지합니다.
 

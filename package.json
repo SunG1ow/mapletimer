@@ -10,7 +10,8 @@
     "preview": "vite preview",
     "build:single": "tsc -b && vite build --mode single",
     "test": "vitest run",
-    "e2e": "node e2e/smoke.mjs && node e2e/editor.mjs"
+    "e2e": "node e2e/smoke.mjs && node e2e/editor.mjs",
+    "release": "npm run build:single && node scripts/release.mjs"
   },
   "dependencies": {
     "react": "^19.3.1",
