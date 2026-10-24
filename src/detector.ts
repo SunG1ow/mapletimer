@@ -2,7 +2,7 @@
 
 import { read, type DigitBank } from './core/digits'
 import { cropRgba, fracToRect, type Rect, type Rgba } from './core/image'
-import { findMinimap } from './core/minimap'
+import { findMinimap, hasSelfDot } from './core/minimap'
 import {
   findShape,
   findTemplate,
@@ -163,7 +163,12 @@ export class Detector {
     let minimap: Rect | null | undefined
     if (t.withinMinimap) {
       minimap = findMinimap(frame, full)
-      if (minimap) full = minimap
+      // 미니맵을 못 찾았거나 내 점이 안 보이면(다른 창이 가림) 이번엔 판단하지 않는다.
+      // 넓은 영역을 대신 뒤지면 맵 장식·이벤트 창 그림을 룬으로 오인한다.
+      if (!minimap || !hasSelfDot(frame, minimap)) {
+        return { id: t.id, found: false, score: 0, variant: -1, x: -1, y: -1, text: null, worst: null, digitCrop: null, minimap: null, skipped: true }
+      }
+      full = minimap
     }
     let m: Hit | null = null
     // 직전 위치(놓쳤어도 최근에 본 위치) 주변을 먼저 본다. 대부분 프레임은 여기서 끝나 전체 탐색 비용을 아낀다.

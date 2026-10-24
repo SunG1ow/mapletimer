@@ -99,6 +99,7 @@ export function TimedRow(p: {
           <span className={st.cls}>{st.label}</span>
           {p.status?.text != null && <span className="ocr">읽음 “{p.status.text}”</span>}
           {p.status?.lastEvent === 'refreshed' && <span className="ok">갱신됨</span>}
+          {p.status?.covered && <span className="muted">가려짐 — 남은 시간 계속 계산</span>}
           {tpl?.digitRect && p.status?.digitCrop && (
             <button className="link" onClick={p.onTeach}>
               숫자 가르치기
@@ -180,7 +181,9 @@ export function RuneRow(p: {
           <span className={st.cls}>{st.label}</span>
           {p.status?.found && <span className="warn">룬 있음!</span>}
           {p.active && p.status && (
-            <span className="muted">{p.status.minimap ? '미니맵 인식됨' : '미니맵 못 찾음 — 탐색 영역 전체 검사'}</span>
+            <span className="muted">
+              {p.status.covered ? '미니맵 가려짐 — 판단 보류' : p.status.minimap ? '미니맵 인식됨' : '미니맵 못 찾음'}
+            </span>
           )}
         </div>
       </div>

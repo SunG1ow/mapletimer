@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { defaultSettings, resolveProfile } from '../../config'
 import { groupText } from '../../app/engine'
 import { makeRgba } from '../image'
-import { findMinimap } from '../minimap'
+import { findMinimap, hasSelfDot } from '../minimap'
 import { noise } from './synth'
 
 function drawMinimap(x0: number, y0: number, w: number, h: number) {
@@ -28,6 +28,16 @@ describe('findMinimap', () => {
   it('테두리가 없으면 null', () => {
     expect(findMinimap(noise(300, 200, 3, 60), { x: 0, y: 0, w: 300, h: 200 })).toBeNull()
     expect(findMinimap(makeRgba(300, 200), { x: 0, y: 0, w: 300, h: 200 })).toBeNull()
+  })
+})
+
+describe('hasSelfDot (미니맵이 가려졌는지)', () => {
+  it('내 캐릭터 노란 점이 있으면 진짜 미니맵, 없으면 다른 창이 가린 것', () => {
+    const img = drawMinimap(7, 68, 190, 77)
+    const r = findMinimap(img, { x: 0, y: 0, w: 600, h: 400 })!
+    expect(hasSelfDot(img, r)).toBe(false) // 이벤트 창처럼 테두리만 있는 사각형
+    for (let y = 110; y < 116; y++) for (let x = 60; x < 66; x++) img.data.set([228, 248, 84, 255], (y * img.width + x) * 4)
+    expect(hasSelfDot(img, r)).toBe(true)
   })
 })
 

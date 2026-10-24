@@ -18,6 +18,8 @@ export interface TargetStatus {
   digitCrop: Rgba | null
   /** 최근 5초 안의 마지막 이벤트(갱신됨 등 표시용) */
   lastEvent: string | null
+  /** 버프: 끝날 때가 아닌데 안 보임(가려짐). 룬: 미니맵이 가려져 판단 보류 */
+  covered?: boolean
 }
 
 const EVENT_SHOW_MS = 5000
@@ -136,15 +138,18 @@ export class Engine {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
     for (const d of detections) {
-      // 판단 보류된 프레임은 추적기에 넣지 않는다(없음으로 세면 가짜 '종료' 알림이 날 수 있다).
-      if (d.skipped) continue
+      // 판단 보류된 프레임은 추적기에 넣지 않는다(없음으로 세면 가짜 '종료'/'룬' 알림이 날 수 있다).
+      if (d.skipped) {
+        if (d.id === RUNE_ID && targets[d.id]) targets[d.id] = { ...targets[d.id], covered: true }
+        continue
+      }
       if (d.id === RUNE_ID) {
         if (!this.settings.rune.enabled) continue
         for (const ev of this.rune.update(d.found, now)) {
           if (ev === 'alert') this.alert(this.settings.rune.speech || '룬', [660, 990, 1320])
           this.lastEvents.set(d.id, { ev, at: now })
         }
-        targets[d.id] = { ...base(d), remainingSec: null, lastEvent: this.recentEvent(d.id, now) }
+        targets[d.id] = { ...base(d), remainingSec: null, lastEvent: this.recentEvent(d.id, now), covered: false }
         continue
       }
       const a = this.settings.timed.find((x) => x.id === d.id)
@@ -160,10 +165,12 @@ export class Engine {
         }
         this.lastEvents.set(d.id, { ev, at: now })
       }
+      const st = tracker.status(now)
       targets[d.id] = {
         ...base(d),
-        remainingSec: tracker.status(now).remainingSec,
+        remainingSec: st.remainingSec,
         lastEvent: this.recentEvent(d.id, now),
+        covered: st.lost,
       }
     }
     this.snapshot = { at: now, frameMs, targets }

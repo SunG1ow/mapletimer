@@ -11,6 +11,9 @@ describe('parseRemaining', () => {
     expect(parseRemaining('1:02:03')).toBe(3723)
     expect(parseRemaining('2:?3')).toBeNull()
     expect(parseRemaining('2:75')).toBeNull()
+    expect(parseRemaining('0:12')).toBeNull() // 1분 미만은 '12'로 표시되므로 오독
+    expect(parseRemaining('05')).toBeNull()
+    expect(parseRemaining('0')).toBe(0)
   })
 })
 
@@ -65,11 +68,62 @@ describe('TimedTracker (숫자 인식)', () => {
     expect(t.status(5000).remainingSec).toBeNull()
   })
 
-  it('아이콘이 사라지면 만료 알림', () => {
+  it('끝날 때 아이콘이 사라지면 만료 알림', () => {
     const t = new TimedTracker(opts)
-    t.update({ found: true, remainingSec: 3 }, 0)
-    expect(t.update({ found: false, remainingSec: null }, 1000)).toEqual([])
-    expect(t.update({ found: false, remainingSec: null }, 2500)).toEqual(['disappeared', 'expired'])
+    for (let ms = 0; ms <= 3000; ms += 250) t.update({ found: true, remainingSec: Math.floor(6 - ms / 1000) }, ms)
+    expect(t.update({ found: false, remainingSec: null }, 4000)).toEqual([])
+    expect(t.update({ found: false, remainingSec: null }, 5500)).toEqual(['disappeared', 'expired'])
+  })
+})
+
+describe('TimedTracker (가려짐과 진짜 종료 구분)', () => {
+  const opts = { mode: 'ocr' as const, durationSec: 0, alertBeforeSec: 20, alertOnExpire: true, missGraceMs: 3000 }
+  const run = (t: TimedTracker, from: number, to: number, f: (s: number) => { found: boolean; remainingSec: number | null }) => {
+    const ev: string[] = []
+    for (let ms = from; ms <= to; ms += 250) ev.push(...t.update(f(ms / 1000), ms).map((e) => `${(ms / 1000).toFixed(2)}:${e}`))
+    return ev
+  }
+
+  it('15분 남았는데 몇 초~수십 초 안 보이면 종료가 아니라 가려짐으로 보고, 다시 보이면 이어서 추적한다', () => {
+    const t = new TimedTracker(opts)
+    // 900초(15분) 남은 버프를 읽다가 10초~40초 동안 가려짐
+    const ev = run(t, 0, 60000, (s) => (s >= 10 && s < 40 ? { found: false, remainingSec: null } : { found: true, remainingSec: Math.floor(900 - s) }))
+    expect(ev.filter((e) => e.endsWith('expired'))).toEqual([])
+    expect(ev.some((e) => e.endsWith('lost'))).toBe(true)
+    expect(t.present).toBe(true)
+    expect(Math.round(t.status(60000).remainingSec!)).toBe(840)
+  })
+
+  it('가려진 동안에도 N초 전 알림은 울리고, 가려진 채 끝나면 종료를 한 번 알린다', () => {
+    const t = new TimedTracker(opts)
+    // 60초 남은 버프를 5초 읽고, 그 뒤로 계속 가려짐
+    const ev = run(t, 0, 70000, (s) => (s < 5 ? { found: true, remainingSec: Math.floor(60 - s) } : { found: false, remainingSec: null }))
+    expect(ev.filter((e) => e.endsWith('alert'))).toHaveLength(1)
+    expect(ev.filter((e) => e.endsWith('expired'))).toHaveLength(1)
+    const expiredAt = Number(ev.find((e) => e.endsWith('expired'))!.split(':')[0])
+    expect(expiredAt).toBeGreaterThan(63)
+    expect(expiredAt).toBeLessThan(64.5)
+  })
+
+  it('남은 시간을 모를 때(10분 이상 표시) 안 보여도 종료로 보지 않는다', () => {
+    const t = new TimedTracker(opts)
+    const ev = run(t, 0, 20000, (s) => ({ found: s < 5, remainingSec: null }))
+    expect(ev.filter((e) => e.endsWith('expired'))).toEqual([])
+  })
+})
+
+describe('TimedTracker (줄어드는 쪽 오독 거부)', () => {
+  it('6분대를 계속 12초로 잘못 읽어도(앞자리 탈락) 20초 전 알림을 내지 않는다', () => {
+    const t = new TimedTracker({ mode: 'ocr', durationSec: 0, alertBeforeSec: 20, alertOnExpire: true })
+    const ev: string[] = []
+    for (let ms = 0; ms <= 15000; ms += 250) {
+      const real = Math.floor(400 - ms / 1000)
+      // 처음 5초는 제대로, 그 뒤 10초는 분 자리를 놓쳐 초만 읽음(일관되게 줄어드는 오답)
+      const read = ms < 5000 ? real : real % 60
+      ev.push(...t.update({ found: true, remainingSec: read }, ms).map((e) => `${ms}:${e}`))
+    }
+    expect(ev.filter((e) => e.endsWith('alert'))).toEqual([])
+    expect(Math.round(t.status(15000).remainingSec!)).toBe(385)
   })
 })
 

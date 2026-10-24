@@ -19,10 +19,13 @@ export interface TimedObservation {
   remainingSec: number | null // 숫자 인식 결과
 }
 
-export type TimedEvent = 'alert' | 'expired' | 'refreshed' | 'appeared' | 'disappeared'
+/** 'lost' = 끝날 때가 아닌데 안 보임(다른 창·이펙트에 가려짐 등). 알림 없이 남은 시간을 계속 센다. */
+export type TimedEvent = 'alert' | 'expired' | 'refreshed' | 'appeared' | 'disappeared' | 'lost'
 
 export interface TimedStatus {
   present: boolean
+  /** 끝날 때가 아닌데 안 보이는 중(가려짐) */
+  lost: boolean
   remainingSec: number | null
   fired: boolean
 }
@@ -37,6 +40,18 @@ const CONFIRM_MS = 2000
 const CONFIRM_READS = 3
 /** 후보끼리 같은 만료 시각으로 볼 범위(읽은 값은 내림 표시라 ±0.5초 오차) */
 const CANDIDATE_TOL_MS = 1200
+/**
+ * 아이콘이 사라졌을 때 남은 시간이 이 이하면 진짜 종료로 본다(마지막 5초는 깜빡이고 서버 랙도 있다).
+ * 그보다 많이 남았는데 안 보이면 가려진 것: 실사용에서 30분 쿠폰이 15분대에 '종료'로 여러 번 오탐했다.
+ */
+const PLAUSIBLE_END_SEC = 15
+/**
+ * 추적 중에 남은 시간이 갑자기 줄어드는 읽기는 오독이다(버프 시간은 저절로 줄지 않는다. 실사용: 6분대 물약을
+ * '0:12'처럼 읽어 20초 전 알림). 지금 추정이 이 시간(1분) 넘게 한 번도 맞는 읽기를 받지 못했을 때만 고친다.
+ */
+const DOWNWARD_FIX_MS = 60000
+/** 가려진 채로 예상 종료 시각이 이만큼 지나면 종료로 본다 */
+const LOST_EXPIRE_GRACE_MS = 3000
 
 interface Candidate {
   firstAt: number
@@ -49,9 +64,12 @@ interface Candidate {
 
 export class TimedTracker {
   present = false
+  lost = false
   expiresAt: number | null = null
   fired = false
   private lastSeen = 0
+  /** 지금 추정과 맞는 읽기를 마지막으로 받은 시각 */
+  private lastSupport = 0
   private candidates: Candidate[] = []
   private opts: TimedOptions
 
@@ -67,6 +85,7 @@ export class TimedTracker {
 
   reset() {
     this.present = false
+    this.lost = false
     this.expiresAt = null
     this.fired = false
     this.candidates = []
@@ -75,6 +94,7 @@ export class TimedTracker {
   status(now: number): TimedStatus {
     return {
       present: this.present,
+      lost: this.lost,
       remainingSec: this.expiresAt === null ? null : Math.max(0, (this.expiresAt - now) / 1000),
       fired: this.fired,
     }
@@ -87,28 +107,49 @@ export class TimedTracker {
       this.lastSeen = now
       if (!this.present) {
         this.present = true
-        ev.push('appeared')
-        if (o.mode === 'appear') {
-          this.expiresAt = now + o.durationSec * 1000
-          this.fired = false
+        if (this.lost) {
+          // 가려졌다가 다시 보임: 같은 버프를 이어서 추적한다.
+          this.lost = false
+        } else {
+          ev.push('appeared')
+          if (o.mode === 'appear') {
+            this.expiresAt = now + o.durationSec * 1000
+            this.fired = false
+          }
         }
       }
       if (o.mode === 'ocr' && obs.remainingSec !== null) this.applyReading(obs.remainingSec, now, ev)
     } else if (this.present && now - this.lastSeen > (o.missGraceMs ?? 2000)) {
       this.present = false
-      ev.push('disappeared')
-      if (o.alertOnExpire) ev.push('expired')
-      this.expiresAt = null
-      this.candidates = []
-      this.fired = false
+      const remaining = this.expiresAt === null ? null : (this.expiresAt - now) / 1000
+      // 남은 시간을 알면 그것으로, 모르면 'N초 전' 알림이 이미 울렸는지로 끝날 때인지 판단한다.
+      const plausibleEnd = remaining !== null ? remaining <= PLAUSIBLE_END_SEC : this.fired
+      if (plausibleEnd) this.end(ev)
+      else {
+        this.lost = true
+        ev.push('lost')
+      }
+    } else if (this.lost && this.expiresAt !== null && now - this.expiresAt > LOST_EXPIRE_GRACE_MS) {
+      // 가려진 채로 끝날 시각이 지났다.
+      this.lost = false
+      this.end(ev)
     }
 
     // 화면에 alertBeforeSec 이하 숫자가 보이는 순간 알린다(남은 시간은 표시값 + 0.5초로 추정하므로 0.5초 여유).
-    if (this.present && this.expiresAt !== null && !this.fired && this.expiresAt - now <= (o.alertBeforeSec + 0.5) * 1000) {
+    // 가려진 동안에도 남은 시간을 알고 있으면 알린다.
+    if ((this.present || this.lost) && this.expiresAt !== null && !this.fired && this.expiresAt - now <= (o.alertBeforeSec + 0.5) * 1000) {
       this.fired = true
       ev.push('alert')
     }
     return ev
+  }
+
+  private end(ev: TimedEvent[]) {
+    ev.push('disappeared')
+    if (this.opts.alertOnExpire) ev.push('expired')
+    this.expiresAt = null
+    this.candidates = []
+    this.fired = false
   }
 
   private applyReading(sec: number, now: number, ev: TimedEvent[]) {
@@ -117,6 +158,7 @@ export class TimedTracker {
     if (this.expiresAt !== null && Math.abs(expires - this.expiresAt) <= TOLERANCE_SEC * 1000) {
       this.expiresAt = this.expiresAt * 0.7 + expires * 0.3
       this.candidates = []
+      this.lastSupport = now
       return
     }
     // 처음 읽었거나 예측과 크게 다르면 후보로 모아 두고, 시간에 걸쳐 확인된 것만 받아들인다.
@@ -134,7 +176,10 @@ export class TimedTracker {
     c.lastAt = now
     // 멈춘 숫자는 시간이 갈수록 만료 시각이 밀리므로 범위가 넓어져 걸러진다.
     if (c.reads < CONFIRM_READS || now - c.firstAt < CONFIRM_MS || c.max - c.min > CANDIDATE_TOL_MS) return
+    const earlier = this.expiresAt !== null && c.expires < this.expiresAt - TOLERANCE_SEC * 1000
+    if (earlier && now - this.lastSupport < DOWNWARD_FIX_MS) return
 
+    this.lastSupport = now
     const refreshed = this.expiresAt !== null && c.expires > this.expiresAt + TOLERANCE_SEC * 1000
     this.expiresAt = c.expires
     this.candidates = []

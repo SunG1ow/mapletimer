@@ -22,7 +22,10 @@
   const bg = document.createElement('canvas'); bg.width = W; bg.height = H
   { const g = bg.getContext('2d'); const img = g.createImageData(W, H); let s = 7
     for (let i = 0; i < W * H; i++) { s = (s * 1664525 + 1013904223) >>> 0; const v = s >>> 25; img.data[i*4] = v; img.data[i*4+1] = v * 0.6; img.data[i*4+2] = 40 + (v >> 1); img.data[i*4+3] = 255 }
-    g.putImageData(img, 0, 0); g.fillStyle = '#000'; g.fillRect(20, 60, 300, 160) } // 미니맵
+    g.putImageData(img, 0, 0)
+    // 미니맵: 밝은 테두리 + 어두운 바탕 + 내 캐릭터 노란 점(없으면 '가려짐'으로 판단 보류)
+    g.fillStyle = '#e6e6e6'; g.fillRect(18, 58, 304, 164); g.fillStyle = '#000'; g.fillRect(20, 60, 300, 160)
+    g.fillStyle = '#e6fa50'; g.beginPath(); g.arc(80, 180, 4, 0, 7); g.fill() }
   // buffStyle: 'small' = 하단 m:ss, 'big' = 가운데 큰 ss (1분 미만), 'blink' = 숫자 없이 깜빡임 (5초 이하)
   const scene = { janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900] }
   window.__scene = scene
@@ -31,7 +34,8 @@
     const step = big ? 13 : 9
     ;[...text].forEach((ch, i) => { g.strokeText(ch, x + i * step, y); g.fillText(ch, x + i * step, y) })
   }
-  const fmt = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
+  // 메이플처럼 1분 미만은 초만(앞자리 0 없음), 1분 이상은 m:ss
+  const fmt = (ms) => { const s = Math.max(0, Math.floor(ms / 1000)); return s < 60 ? String(s) : `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }
   const canvas = document.createElement('canvas'); canvas.width = W; canvas.height = H
   const g = canvas.getContext('2d')
   function draw() {

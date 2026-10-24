@@ -81,3 +81,28 @@ export function findMinimap(img: Rgba, area: Rect): Rect | null {
   }
   return best
 }
+
+/** 내 캐릭터 점(노랑) 색. 실제 게임 화면에서 측정. */
+const SELF_DOT = [230, 250, 80]
+const SELF_DOT_TOL = 45
+
+/**
+ * 미니맵 안에 내 캐릭터 점(노란 원)이 보이는지. 미니맵에는 항상 내 점이 있으므로, 없으면 이벤트 창 같은
+ * 다른 창이 미니맵을 가렸거나 미니맵이 아닌 사각형을 잘못 찾은 것이다(실사용에서 이벤트 창을 열 때 룬 오탐).
+ */
+export function hasSelfDot(img: Rgba, r: Rect): boolean {
+  let n = 0
+  for (let y = r.y; y < r.y + r.h; y++) {
+    for (let x = r.x; x < r.x + r.w; x++) {
+      const i = (y * img.width + x) * 4
+      if (
+        Math.abs(img.data[i] - SELF_DOT[0]) <= SELF_DOT_TOL &&
+        Math.abs(img.data[i + 1] - SELF_DOT[1]) <= SELF_DOT_TOL &&
+        Math.abs(img.data[i + 2] - SELF_DOT[2]) <= SELF_DOT_TOL &&
+        ++n >= 4
+      )
+        return true
+    }
+  }
+  return false
+}
