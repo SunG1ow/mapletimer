@@ -110,6 +110,7 @@ export default function App() {
           return {
             rgba: { ...img, data: new Uint8ClampedArray(img.data) },
             digitRect: t.digitRect,
+            readDigits: t.readDigits,
             bgTolerance: t.bgTolerance,
           }
         }),

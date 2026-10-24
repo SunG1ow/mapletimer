@@ -3,14 +3,43 @@
 
 import { downscale, downscaleMask, toGray, toPlanes, type Gray, type Rect, type Rgba } from './image'
 
+/** 축소 탐색용 템플릿. 화면 위 위치가 축소 배율의 배수가 아니면 묶는 경계가 어긋나므로, 시작점을 밀어 둔 판을 모두 둔다. */
+export interface CoarsePhase {
+  px: number
+  py: number
+  gray: Gray
+  mask: Uint8Array
+  /** 마스크가 "전체 사각형 - 빼는 사각형 하나"면 그 빼는 사각형(없으면 null). 적분 영상으로 빠르게 계산한다. */
+  hole: Rect | null | undefined
+}
+
+/** 마스크의 0인 부분이 사각형 하나면 그 사각형, 0이 없으면 null, 그 밖의 모양이면 undefined(빠른 계산 불가). */
+function maskHole(mask: Uint8Array, w: number, h: number): Rect | null | undefined {
+  let x0 = w
+  let y0 = h
+  let x1 = -1
+  let y1 = -1
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (mask[y * w + x]) continue
+      if (x < x0) x0 = x
+      if (y < y0) y0 = y
+      if (x > x1) x1 = x
+      if (y > y1) y1 = y
+    }
+  }
+  if (x1 < 0) return null
+  for (let y = y0; y <= y1; y++) for (let x = x0; x <= x1; x++) if (mask[y * w + x]) return undefined
+  return { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 }
+}
+
 export interface PreparedTemplate {
   width: number
   height: number
   planes: Gray[]
   mask: Uint8Array // 1 = 비교에 사용
   coarseScale: number
-  coarseGray: Gray
-  coarseMask: Uint8Array
+  coarse: CoarsePhase[]
 }
 
 export interface MatchResult {
@@ -33,16 +62,37 @@ export function prepareTemplate(rgba: Rgba, exclude?: Rect | null): PreparedTemp
   // 축소 탐색 배율. 이펙트가 많은 사냥 화면에서는 4배 축소하면 진짜 위치가 후보에서 빠지는 일이 있어
   // (실제 스크린샷으로 확인) 최대 2배로 제한한다.
   const coarseScale = Math.max(1, Math.min(2, Math.floor(Math.min(width, height) / 6)))
-  return {
-    width,
-    height,
-    planes: toPlanes(rgba),
-    mask,
-    coarseScale,
-    coarseGray: downscale(toGray(rgba), coarseScale),
-    coarseMask: downscaleMask(mask, width, height, coarseScale),
+  // 2배 축소 시 아이콘이 홀수 좌표에 있으면 반 칸 어긋나 축소 점수가 크게 떨어진다(VIP 아이콘 실측 0.42).
+  // 시작점을 0~(배율-1)만큼 민 판을 모두 만들어 어느 좌표든 한 판은 경계가 맞게 한다.
+  const gray = toGray(rgba)
+  const coarse: CoarsePhase[] = []
+  for (let py = 0; py < coarseScale; py++) {
+    for (let px = 0; px < coarseScale; px++) {
+      const w = width - px
+      const h = height - py
+      const g = new Float32Array(w * h)
+      const m = new Uint8Array(w * h)
+      for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+          g[y * w + x] = gray.data[(y + py) * width + x + px]
+          m[y * w + x] = mask[(y + py) * width + x + px]
+        }
+      }
+      const cg = downscale({ width: w, height: h, data: g }, coarseScale)
+      const cm = downscaleMask(m, w, h, coarseScale)
+      coarse.push({ px, py, gray: cg, mask: cm, hole: maskHole(cm, cg.width, cg.height) })
+    }
   }
+  return { width, height, planes: toPlanes(rgba), mask, coarseScale, coarse }
 }
+
+/**
+ * 축소 탐색 위치가 이보다 많으면(화면 전체 등) 첫 판(시작점 0)만 전체를 보고 후보를 고른 뒤,
+ * 나머지 판은 그 후보 주변만 본다. 네 판을 전체에 다 돌리면 화면 전체에서 실측 1.2초.
+ * 첫 판에서 반 칸 어긋난 아이콘도 점수가 크게 떨어질 뿐 상위 수백 안에는 든다(VIP 실측 19위).
+ */
+const PRE_FILTER_POSITIONS = 40_000
+const PRE_KEEP = 600
 
 interface ZeroMeanTemplate {
   offsetsT: Int32Array // 템플릿 내부 인덱스
@@ -102,13 +152,16 @@ function nccAt(img: Float32Array, base: number, offs: Int32Array, zt: ZeroMeanTe
   return sIT / Math.sqrt(varI * zt.sumSq)
 }
 
-const cache = new WeakMap<PreparedTemplate, { coarse: ZeroMeanTemplate; planes: ZeroMeanTemplate[] }>()
+const cache = new WeakMap<
+  PreparedTemplate,
+  { coarse: ZeroMeanTemplate[]; planes: ZeroMeanTemplate[] }
+>()
 
 function zeroMeans(t: PreparedTemplate) {
   let z = cache.get(t)
   if (!z) {
     z = {
-      coarse: zeroMean(t.coarseGray, t.coarseMask),
+      coarse: t.coarse.map((c) => zeroMean(c.gray, c.mask)),
       planes: t.planes.map((p) => zeroMean(p, t.mask)),
     }
     cache.set(t, z)
@@ -159,39 +212,79 @@ export class SearchRegion {
   planes(): Gray[] {
     return (this.planesCache ??= toPlanes(this.rgba))
   }
+
+  private integrals = new Map<number, { s: Float64Array; s2: Float64Array }>()
+
+  /** 축소 영상의 누적합(값, 제곱). 사각형 합을 덧셈 4번으로 구한다. */
+  integral(scale: number) {
+    let r = this.integrals.get(scale)
+    if (!r) {
+      const g = this.gray(scale)
+      const W = g.width + 1
+      const sum = new Float64Array(W * (g.height + 1))
+      const sum2 = new Float64Array(W * (g.height + 1))
+      for (let y = 0; y < g.height; y++) {
+        let row = 0
+        let row2 = 0
+        for (let x = 0; x < g.width; x++) {
+          const v = g.data[y * g.width + x]
+          row += v
+          row2 += v * v
+          sum[(y + 1) * W + x + 1] = sum[y * W + x + 1] + row
+          sum2[(y + 1) * W + x + 1] = sum2[y * W + x + 1] + row2
+        }
+      }
+      r = { s: sum, s2: sum2 }
+      this.integrals.set(scale, r)
+    }
+    return r
+  }
+}
+
+function rectSum(I: Float64Array, W: number, x: number, y: number, w: number, h: number): number {
+  return I[(y + h) * W + x + w] - I[y * W + x + w] - I[(y + h) * W + x] + I[y * W + x]
 }
 
 /**
  * region(이미 잘라낸 탐색 영역) 안에서 템플릿의 최적 위치를 찾는다.
  * 반환 좌표는 region 기준.
  */
-export function findTemplate(input: Rgba | SearchRegion, t: PreparedTemplate, topK = 60): MatchResult | null {
-  const region = input instanceof SearchRegion ? input : new SearchRegion(input)
-  if (region.rgba.width < t.width || region.rgba.height < t.height) return null
-  const s = t.coarseScale
-  const z = zeroMeans(t)
-  const gray = region.gray(s)
-  const tw = t.coarseGray.width
-  const th = t.coarseGray.height
-  const mw = gray.width - tw + 1
-  const mh = gray.height - th + 1
-  if (mw <= 0 || mh <= 0) return null
-
-  const offs = imageOffsets(z.coarse, tw, gray.width)
-  const scores = new Float32Array(mw * mh)
-  for (let y = 0; y < mh; y++) {
-    for (let x = 0; x < mw; x++) {
-      scores[y * mw + x] = nccAt(gray.data, y * gray.width + x, offs, z.coarse)
+/** 축소 영상 위 (x,y)에서 한 판의 NCC를 계산하는 함수. 마스크가 사각형 구멍이면 누적합으로 빠르게. */
+function scorer(region: SearchRegion, scale: number, phase: CoarsePhase, zt: ZeroMeanTemplate) {
+  const gray = region.gray(scale)
+  const tw = phase.gray.width
+  const th = phase.gray.height
+  const offs = imageOffsets(zt, tw, gray.width)
+  const hole = phase.hole
+  if (hole === undefined || zt.sumSq < 1e-3) return (x: number, y: number) => nccAt(gray.data, y * gray.width + x, offs, zt)
+  const { s: S, s2: S2 } = region.integral(scale)
+  const W = gray.width + 1
+  const v = zt.values
+  const n = zt.n
+  return (x: number, y: number) => {
+    let sI = rectSum(S, W, x, y, tw, th)
+    let sI2 = rectSum(S2, W, x, y, tw, th)
+    if (hole) {
+      sI -= rectSum(S, W, x + hole.x, y + hole.y, hole.w, hole.h)
+      sI2 -= rectSum(S2, W, x + hole.x, y + hole.y, hole.w, hole.h)
     }
+    const varI = sI2 - (sI * sI) / n
+    if (varI < 1e-3) return 0
+    const base = y * gray.width + x
+    let sIT = 0
+    for (let k = 0; k < offs.length; k++) sIT += gray.data[base + offs[k]] * v[k]
+    return sIT / Math.sqrt(varI * zt.sumSq)
   }
+}
 
-  // 지역 최댓값만 모아 점수순으로 정렬한 뒤, 가까운 것은 건너뛰며 상위 후보를 고른다.
-  const peaks: number[] = []
+/** 점수 지도에서 thr 넘는 지역 최댓값 위치를 점수 높은 순으로. */
+function localMaxima(scores: Float32Array, mw: number, mh: number, thr: number): number[] {
+  const out: number[] = []
   for (let y = 0; y < mh; y++) {
     for (let x = 0; x < mw; x++) {
       const i = y * mw + x
       const v = scores[i]
-      if (v <= 0.2) continue
+      if (v <= thr) continue
       let isMax = true
       for (let dy = -1; dy <= 1 && isMax; dy++) {
         const yy = y + dy
@@ -204,18 +297,85 @@ export function findTemplate(input: Rgba | SearchRegion, t: PreparedTemplate, to
           }
         }
       }
-      if (isMax) peaks.push(i)
+      if (isMax) out.push(i)
     }
   }
-  peaks.sort((a, b) => scores[b] - scores[a])
+  return out.sort((a, b) => scores[b] - scores[a])
+}
+
+/**
+ * region(이미 잘라낸 탐색 영역) 안에서 템플릿의 최적 위치를 찾는다. 반환 좌표는 region 기준.
+ * 단계: (넓으면) 4배 축소로 후보 위치 거르기 → 2배 축소 + 시작점 민 판들로 후보 → 원본 컬러 NCC로 정밀.
+ */
+export function findTemplate(input: Rgba | SearchRegion, t: PreparedTemplate, topK = 60): MatchResult | null {
+  const region = input instanceof SearchRegion ? input : new SearchRegion(input)
+  if (region.rgba.width < t.width || region.rgba.height < t.height) return null
+  const s = t.coarseScale
+  const z = zeroMeans(t)
+  const gray = region.gray(s)
+
+  const peaks: MatchResult[] = []
+  const toFull = (phase: CoarsePhase, x: number, y: number) => ({ x: x * s - phase.px, y: y * s - phase.py })
+  const fullMap = (pi: number) => {
+    const phase = t.coarse[pi]
+    const mw = gray.width - phase.gray.width + 1
+    const mh = gray.height - phase.gray.height + 1
+    if (mw <= 0 || mh <= 0) return null
+    const score = scorer(region, s, phase, z.coarse[pi])
+    const map = new Float32Array(mw * mh)
+    for (let y = 0; y < mh; y++) for (let x = 0; x < mw; x++) map[y * mw + x] = score(x, y)
+    return { map, mw, mh }
+  }
+
+  const first = fullMap(0)
+  if (!first) return null
+  const positions = first.mw * first.mh
+  if (positions > PRE_FILTER_POSITIONS && t.coarse.length > 1) {
+    // 첫 판으로 후보를 고르고, 나머지 판은 후보 주변(±1칸)만 본다.
+    const seeds = localMaxima(first.map, first.mw, first.mh, 0.1).slice(0, PRE_KEEP)
+    for (const i of seeds) {
+      if (first.map[i] > 0.2) peaks.push({ ...toFull(t.coarse[0], i % first.mw, Math.floor(i / first.mw)), score: first.map[i] })
+    }
+    for (let pi = 1; pi < t.coarse.length; pi++) {
+      const phase = t.coarse[pi]
+      const mw = gray.width - phase.gray.width + 1
+      const mh = gray.height - phase.gray.height + 1
+      const score = scorer(region, s, phase, z.coarse[pi])
+      for (const i of seeds) {
+        const cx = i % first.mw
+        const cy = Math.floor(i / first.mw)
+        let bestV = -Infinity
+        let bx = 0
+        let by = 0
+        for (let y = Math.max(0, cy - 1); y <= Math.min(mh - 1, cy + 1); y++) {
+          for (let x = Math.max(0, cx - 1); x <= Math.min(mw - 1, cx + 1); x++) {
+            const v = score(x, y)
+            if (v > bestV) {
+              bestV = v
+              bx = x
+              by = y
+            }
+          }
+        }
+        if (bestV > 0.2) peaks.push({ ...toFull(phase, bx, by), score: bestV })
+      }
+    }
+  } else {
+    t.coarse.forEach((phase, pi) => {
+      const m = pi === 0 ? first : fullMap(pi)
+      if (!m) return
+      for (const i of localMaxima(m.map, m.mw, m.mh, 0.2)) peaks.push({ ...toFull(phase, i % m.mw, Math.floor(i / m.mw)), score: m.map[i] })
+    })
+  }
+  peaks.sort((a, b) => b.score - a.score)
+
+  // 가까운 봉우리는 하나로 친다. 너무 넓게 지우면 진짜 위치 바로 옆의 더 강한 가짜 봉우리가 진짜를 지운다.
+  const rx = Math.max(1, Math.floor(t.width / 4))
+  const ry = Math.max(1, Math.floor(t.height / 4))
   const candidates: { x: number; y: number }[] = []
-  const rx = Math.max(1, Math.floor(tw / 2))
-  const ry = Math.max(1, Math.floor(th / 2))
-  for (const i of peaks) {
-    const cx = i % mw
-    const cy = Math.floor(i / mw)
-    if (candidates.some((c) => Math.abs(c.x - cx) <= rx && Math.abs(c.y - cy) <= ry)) continue
-    candidates.push({ x: cx, y: cy })
+  for (const p of peaks) {
+    if (candidates.some((c) => Math.abs(c.x - p.x) <= rx && Math.abs(c.y - p.y) <= ry)) continue
+    candidates.push(p)
     if (candidates.length >= topK) break
   }
   if (!candidates.length) return null
@@ -226,8 +386,8 @@ export function findTemplate(input: Rgba | SearchRegion, t: PreparedTemplate, to
   for (const c of candidates) {
     for (let dy = -r; dy <= r; dy++) {
       for (let dx = -r; dx <= r; dx++) {
-        const x = c.x * s + dx
-        const y = c.y * s + dy
+        const x = c.x + dx
+        const y = c.y + dy
         const score = colorScore(planes, t, x, y)
         if (!best || score > best.score) best = { x, y, score }
       }
@@ -311,7 +471,8 @@ export function prepareShape(img: Rgba, mask: Uint8Array): PreparedShape {
   return { width: img.width, height: img.height, idx: Int32Array.from(idx), rgb: Uint8Array.from(rgb) }
 }
 
-const COLOR_TOL = 48
+// 템플릿을 JPG 스크린샷에서 만들면 실제 화면보다 색이 최대 ~57 어둡게 저장된다(실측). 미니맵 안에서만 찾으므로 넉넉하게.
+const COLOR_TOL = 72
 
 /**
  * 미니맵 플레이어 점 색(실제 게임 화면에서 측정): 노랑(본인), 칙칙한 분홍빨강(다른 사람).

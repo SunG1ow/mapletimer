@@ -11,6 +11,8 @@ export interface TemplateData {
   height: number
   /** 템플릿 안에서 숫자가 표시되는 영역. 매칭에서 제외하고 OCR에 쓴다. */
   digitRect: Rect | null
+  /** false면 digitRect는 매칭에서 빼기만 하고 숫자는 읽지 않는다(예: 10분 이상일 때 왼쪽 아래 작은 흰 숫자). */
+  readDigits?: boolean
   /** 룬: 가장자리(미니맵 배경)와 이 값 이상 다른 픽셀만 비교한다. */
   bgTolerance?: number
 }

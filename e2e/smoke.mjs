@@ -59,7 +59,7 @@ await page.waitForTimeout(4000); await sample('m:ss')
 await page.waitForTimeout(8000); await sample('janus alert')
 await page.waitForTimeout(13000); await sample('buff big ss')
 await page.waitForTimeout(36000); await sample('buff blink')
-await page.waitForTimeout(6000)
+await page.waitForTimeout(10000) // 사라진 뒤 3초 지나야 종료로 판단
 const log = await page.locator('.log').innerText()
 console.log('log:\n' + log)
 const expect = ['야누스 10초 전', '도핑 20초 전', '도핑 종료', '룬']

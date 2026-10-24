@@ -1,5 +1,5 @@
-// 밤의 길 3 스크린샷 17장(1920x1080)으로 presets/bam3-1920x1080.json 을 만들고 정확도를 검증한다.
-// 사용: python3 로 스크린샷을 RGBA raw(2.rgba ~ 18.rgba)로 바꾼 폴더를 넘긴다.
+// 밤의 길 3 스크린샷 17장(1920x1080) + 실사용 화면 1장(21)으로 presets/bam3-1920x1080.json 을 만들고 정확도를 검증한다.
+// 사용: python3 로 스크린샷을 RGBA raw(2.rgba ~ 18.rgba, 21.rgba)로 바꾼 폴더를 넘긴다.
 //   npx tsx tools/build-preset-bam3.ts <raw폴더> presets/bam3-1920x1080.json
 // 정답(아이콘 위 숫자)은 스크린샷을 직접 보고 적은 값. 다른 해상도/사냥터용 프리셋을 만들 때 참고용.
 import fs from 'node:fs'
@@ -13,6 +13,9 @@ const [RAW, OUT] = process.argv.slice(2)
 const P = '1920x1080'
 const frames: Record<number, Rgba> = {}
 for (let i = 2; i <= 18; i++) frames[i] = { width: 1920, height: 1080, data: new Uint8ClampedArray(fs.readFileSync(`${RAW}/${i}.rgba`)) }
+// 21: 실제 사용 중 화면(쿠폰이 28분 남아 왼쪽 아래 작은 흰 숫자로 표시되는 상태). 1919x1079 캡처.
+frames[21] = { width: 1919, height: 1079, data: new Uint8ClampedArray(fs.readFileSync(`${RAW}/21.rgba`)) }
+const FRAMES = [...Array.from({ length: 17 }, (_, k) => k + 2), 21]
 
 // ---- PNG 인코딩 (dataURL) ----
 const crcTable = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0 })
@@ -41,7 +44,11 @@ const icon = (i: number, x: number, y: number) => cropRgba(frames[i], { x, y, w:
 const janusTpl = icon(3, 1150, 913)
 const buffNames = ['경험치 3배 쿠폰', '물약 1', '주머니', 'VIP 부스터', '물약 2', '유니온 1', '유니온 2']
 const buffTpls = buffNames.map((_, k) => icon(12, 1675 + 32 * k, 79))
+// 남은 시간이 길 때(몇 분 이상)는 숫자가 왼쪽 아래 작은 흰 글씨 → 그 부분만 비교에서 뺀 두 번째 모양
+const MINUTES_RECT: Rect = { x: 0, y: 15, w: 20, h: 13 }
+const buffMinuteTpls = buffNames.map((_, k) => icon(21, 1675 + 32 * k, 79))
 const runeTpl = cropRgba(frames[10], { x: 79, y: 83, w: 15, h: 15 })
+const runeTpl2 = cropRgba(frames[21], { x: 101, y: 83, w: 15, h: 15 })
 const tpl = (img: Rgba, digitRect: Rect | null, extra: Partial<TemplateData> = {}): TemplateData => ({ png: png(img), width: img.width, height: img.height, digitRect, ...extra })
 
 // ---- 정답 ----
@@ -51,22 +58,37 @@ const buffTruth: Record<number, (string | null)[]> = {
   13: ['41', '41', '41', '40', '40', '40', '40'], 14: ['25', '25', '24', '24', '24', '24', '24'], 15: ['14', '13', '13', '13', '13', '13', '13'],
   16: ['', '', '', '', '', '', ''], 17: ['', null, null, null, null, null, null],
 }
-for (let i = 2; i <= 18; i++) buffTruth[i] ??= Array(7).fill(null)
-const runeTruth = (i: number) => ([6, 10, 11].includes(i) ? true : i === 7 ? null : false)
+buffTruth[21] = Array(7).fill('')
+janusTruth[21] = '2:41'
+for (const i of FRAMES) buffTruth[i] ??= Array(7).fill(null)
+const runeTruth = (i: number) => ([6, 10, 11, 21].includes(i) ? true : i === 7 ? null : false)
 
 const targetsFor = (): TargetSpec[] => [
   { id: 'janus', region: { x: 0, y: 0, w: 1, h: 1 }, variants: [{ rgba: janusTpl, digitRect: DR }], method: 'ncc', threshold: 0.8 },
-  ...buffTpls.map((t, k) => ({ id: `buff${k}`, region: { x: 0.5, y: 0, w: 0.5, h: 0.3 }, variants: [{ rgba: t, digitRect: DR }], method: 'ncc' as const, threshold: 0.8 })),
-  { id: 'rune', region: { x: 0, y: 0, w: 0.35, h: 0.45 }, variants: [{ rgba: runeTpl, digitRect: null, bgTolerance: 40 }], method: 'shape', threshold: 0.65, withinMinimap: true },
+  ...buffTpls.map((t, k) => ({
+    id: `buff${k}`,
+    region: { x: 0.5, y: 0, w: 0.5, h: 0.3 },
+    variants: [{ rgba: t, digitRect: DR }, { rgba: buffMinuteTpls[k], digitRect: MINUTES_RECT, readDigits: false }],
+    method: 'ncc' as const,
+    threshold: 0.8,
+  })),
+  {
+    id: 'rune',
+    region: { x: 0, y: 0, w: 0.35, h: 0.45 },
+    variants: [{ rgba: runeTpl, digitRect: null, bgTolerance: 40 }, { rgba: runeTpl2, digitRect: null, bgTolerance: 40 }],
+    method: 'shape',
+    threshold: 0.65,
+    withinMinimap: true,
+  },
 ]
 const truthOf = (i: number, id: string) => (id === 'janus' ? janusTruth[i] : buffTruth[i][Number(id.slice(4))])
 
 // ---- 숫자 크롭 수집 (감지기로 위치를 찾고 정답 라벨) ----
 const labeled: { img: number; crop: Rgba; label: string }[] = []
-for (let i = 2; i <= 18; i++) {
+for (const i of FRAMES) {
   const d = new Detector(); d.configure({ digitBank: emptyBank(), targets: targetsFor() })
-  for (let k = 0; k < 6; k++) d.detect(frames[i], k * 250)
-  for (const r of d.detect(frames[i], 1500)) {
+  for (let k = 0; k < 12; k++) d.detect(frames[i], k * 250)
+  for (const r of d.detect(frames[i], 3000)) {
     if (r.id === 'rune') continue
     const label = truthOf(i, r.id)
     if (r.found && r.digitCrop && label) labeled.push({ img: i, crop: r.digitCrop, label })
@@ -83,13 +105,13 @@ const trainBank = (exclude: number | null) => {
 // ---- 검증: 프레임마다 그 프레임을 뺀 학습으로 (처음 보는 화면 기준 정확도) ----
 let pass = 0, total = 0
 const report: string[] = []
-for (let i = 2; i <= 18; i++) {
+for (const i of FRAMES) {
   const { b } = trainBank(i)
   const d = new Detector(); d.configure({ digitBank: b, targets: targetsFor() })
   const cells: string[] = []
   // 실제처럼 같은 화면을 여러 프레임(4fps로 1.5초) 본 뒤의 결과
   let res = d.detect(frames[i], 0)
-  for (let k = 1; k <= 6; k++) {
+  for (let k = 1; k <= 12; k++) {
     const r2 = d.detect(frames[i], k * 250)
     res = res.map((x) => r2.find((y) => y.id === x.id) ?? x)
   }
@@ -120,9 +142,13 @@ const { b: bank, ok } = trainBank(null)
 console.log(`숫자 학습: ${ok}/${labeled.length}개 크롭, 글자 ${learnedChars(bank).join('')}, 표본 ${bank.samples.length}개`)
 const s: Settings = defaultSettings()
 const janus = { ...newTimedAlert('skill', '솔 야누스 : 새벽'), id: 'janus', templates: { [P]: [tpl(janusTpl, DR)] } }
-const buffs = buffTpls.map((t, k) => ({ ...newTimedAlert('buff', buffNames[k]), id: `buff${k}`, templates: { [P]: [tpl(t, DR)] } }))
+const buffs = buffTpls.map((t, k) => ({
+  ...newTimedAlert('buff', buffNames[k]),
+  id: `buff${k}`,
+  templates: { [P]: [tpl(t, DR), tpl(buffMinuteTpls[k], MINUTES_RECT, { readDigits: false })] },
+}))
 s.timed = [janus, ...buffs]
-s.rune = { ...s.rune, templates: { [P]: [tpl(runeTpl, null, { bgTolerance: 40 })] } }
+s.rune = { ...s.rune, templates: { [P]: [tpl(runeTpl, null, { bgTolerance: 40 }), tpl(runeTpl2, null, { bgTolerance: 40 })] } }
 s.profiles = { [P]: { digitBank: bank } }
 fs.writeFileSync(OUT, JSON.stringify(s, null, 2))
 console.log('saved', OUT, (fs.statSync(OUT).size / 1024).toFixed(0) + 'KB')

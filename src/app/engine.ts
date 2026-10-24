@@ -136,6 +136,8 @@ export class Engine {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
     for (const d of detections) {
+      // 판단 보류된 프레임은 추적기에 넣지 않는다(없음으로 세면 가짜 '종료' 알림이 날 수 있다).
+      if (d.skipped) continue
       if (d.id === RUNE_ID) {
         if (!this.settings.rune.enabled) continue
         for (const ev of this.rune.update(d.found, now)) {
