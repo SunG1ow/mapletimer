@@ -45,6 +45,11 @@ export function useSettings() {
   return [settings, update, setSettings] as const
 }
 
+/** 바로 저장한다. 저장 공간 부족 등으로 실패하면 예외를 그대로 던진다(가져오기에서 사용자에게 보여 주려고). */
+export function saveSettingsNow(s: Settings) {
+  localStorage.setItem(KEY, JSON.stringify(s))
+}
+
 export function exportSettings(s: Settings): string {
   return JSON.stringify(s, null, 2)
 }

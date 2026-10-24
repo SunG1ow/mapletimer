@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Capture } from './app/capture'
 import { Engine, RUNE_ID, type EngineSnapshot } from './app/engine'
 import { beep, speak, unlockAudio } from './app/sound'
-import { exportSettings, migrate, useSettings } from './app/store'
+import { exportSettings, migrate, saveSettingsNow, useSettings } from './app/store'
 import { decodePng, rgbaToDataUrl } from './app/templates'
 import {
   newTimedAlert,
@@ -446,6 +446,7 @@ function SettingsCard(p: {
 }) {
   const s = p.settings
   const fileRef = useRef<HTMLInputElement>(null)
+  const [importMsg, setImportMsg] = useState<{ ok: boolean; text: string } | null>(null)
   const regionInput = (key: keyof Regions, label: string) => {
     const r = s.regions[key]
     const field = (k: keyof Rect) => (
@@ -522,16 +523,29 @@ function SettingsCard(p: {
           accept="application/json"
           hidden
           onChange={async (e) => {
-            const f = e.target.files?.[0]
+            const input = e.currentTarget
+            const f = input.files?.[0]
+            // 같은 파일을 다시 골라도 change가 일어나도록 비운다(안 비우면 Chrome은 아무 일도 하지 않는다).
+            input.value = ''
             if (!f) return
             try {
-              p.replace(migrate(JSON.parse(await f.text()) as Partial<Settings>))
-            } catch {
-              alert('설정 파일을 읽지 못했습니다.')
+              const next = migrate(JSON.parse(await f.text()) as Partial<Settings>)
+              saveSettingsNow(next)
+              p.replace(next)
+              const shapes = (t: Record<string, unknown[]>) => Object.values(t).reduce((n, v) => n + v.length, 0)
+              const skills = next.timed.filter((a) => a.group === 'skill').length
+              const buffs = next.timed.filter((a) => a.group === 'buff').length
+              setImportMsg({
+                ok: true,
+                text: `불러왔습니다 (${f.name}): 스킬 ${skills}개, 버프 ${buffs}개, 룬 모양 ${shapes(next.rune.templates)}개, 해상도 ${Object.keys(next.profiles).join(', ') || '없음'}`,
+              })
+            } catch (err) {
+              setImportMsg({ ok: false, text: `불러오지 못했습니다 (${f.name}): ${err instanceof Error ? err.message : String(err)}` })
             }
           }}
         />
       </div>
+      {importMsg && <p className={importMsg.ok ? 'ok small' : 'error small'}>{importMsg.text}</p>}
     </section>
   )
 }
