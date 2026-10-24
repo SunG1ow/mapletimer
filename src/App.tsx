@@ -406,7 +406,8 @@ export default function App() {
 function TeachDialog(p: { crop: Rgba; bank: DigitBank; onLearn: (text: string) => void; onClose: () => void }) {
   const [text, setText] = useState('')
   const glyphs = segment(p.crop, p.bank).length
-  const typed = [...text.replace(/\s+/g, '')].length
+  // 콜론은 글자로 분리하지 않으므로 숫자만 센다
+  const typed = text.replace(/[^0-9]/g, '').length
   // 처음 학습할 때는 글자 판정 기준을 자동으로 맞출 수 있다.
   const auto = typed > 0 && typed !== glyphs && !p.bank.samples.length && findRule(p.crop, typed, p.bank) !== null
   return (
@@ -415,7 +416,7 @@ function TeachDialog(p: { crop: Rgba; bank: DigitBank; onLearn: (text: string) =
         <h3>숫자 가르치기</h3>
         <img className="pixel teach" src={rgbaToDataUrl(p.crop, 8)} alt="" />
         <p className="small">
-          그림에 보이는 숫자를 그대로 입력하세요. (분리된 글자 {glyphs}개{auto ? ' → 판정 기준 자동 조정' : ''})
+          그림에 보이는 숫자를 그대로 입력하세요. (찾은 숫자 {glyphs}개{auto ? ' → 판정 기준 자동 조정' : ''})
         </p>
         <input autoFocus value={text} placeholder="예: 1:07" onChange={(e) => setText(e.target.value)} />
         <div className="modal-foot">

@@ -187,7 +187,8 @@ export function TemplateEditor(p: Props) {
     })
   }
 
-  const typed = [...learnText.replace(/\s+/g, '')].length
+  // 콜론은 글자로 분리하지 않으므로 숫자만 센다
+  const typed = learnText.replace(/[^0-9]/g, '').length
   const auto =
     !!digits && typed > 0 && typed !== digitPreview?.glyphs && !p.bank.samples.length
       ? findRule(cropToRgba(snap, digits), typed, p.bank)
@@ -284,7 +285,7 @@ export function TemplateEditor(p: Props) {
                 <input value={learnText} placeholder="예: 2:43" onChange={(e) => setLearnText(e.target.value)} />
               </label>
               <small className={learnText && typed !== digitPreview.glyphs && auto === null ? 'warn' : ''}>
-                분리된 글자 {digitPreview.glyphs}개{learnText ? ` / 입력 ${typed}자` : ''}
+                찾은 숫자 {digitPreview.glyphs}개{learnText ? ` / 입력한 숫자 ${typed}개` : ''}
                 {auto !== null && ` → 저장 시 ${ruleLabel({ ...p.bank, ...auto })}로 자동 조정`}
               </small>
             </div>
