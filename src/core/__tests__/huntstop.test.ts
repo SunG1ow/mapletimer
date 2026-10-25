@@ -4,14 +4,29 @@ import { HuntStopTracker } from '../trackers'
 import { noise, text } from './synth'
 import { makeRgba, type Rgba } from '../image'
 
-/** 맨 아래 띠 흉내: 어두운 바탕 + 왼쪽 노란 경험치 바 + 가운데 경험치 숫자 */
-function strip(expText: string, barPx: number): Rgba {
+/**
+ * 맨 아래 띠 흉내: 어두운 바탕 + 왼쪽 노란 경험치 바 + 가운데 흰 경험치 숫자.
+ * fire를 주면 위아래 비치는 행과 반투명 바탕에 불꽃 같은 주황·빨강 잡음을 깐다(경험치 아이템 효과).
+ */
+function strip(expText: string, barPx: number, fire?: number): Rgba {
   const img = makeRgba(600, 14)
-  for (let i = 0; i < img.width * img.height; i++) img.data.set([30, 30, 34, 255], i * 4)
+  const flame = fire ? noise(600, 14, fire, 255) : null
+  for (let i = 0; i < img.width * img.height; i++) {
+    if (!flame) img.data.set([30, 30, 34, 255], i * 4)
+    else {
+      const y = Math.floor(i / img.width)
+      const k = y < 4 || y >= 12 ? 1 : 0.3 // 띠 위아래는 그대로 비치고 바 바탕은 흐리게 비친다
+      const v = flame.data[i * 4]
+      img.data.set([30 + (225 * k * v) / 255, 30 + (110 * k * v) / 255, 34 + (20 * k * v) / 255, 255], i * 4)
+    }
+  }
   for (let y = 4; y < 12; y++) for (let x = 0; x < barPx; x++) img.data.set([200, 230, 40, 255], (y * img.width + x) * 4)
   const t = text(expText, 2, noise(60, 14, 3, 20))
   for (let y = 0; y < t.height; y++) {
-    for (let x = 0; x < t.width; x++) img.data.set(t.data.subarray((y * t.width + x) * 4, (y * t.width + x) * 4 + 4), (y * img.width + 260 + x) * 4)
+    for (let x = 0; x < t.width; x++) {
+      const i = (y * t.width + x) * 4
+      if (t.data[i] === 255) img.data.set([250, 248, 250, 255], (y * img.width + 260 + x) * 4) // 글자 픽셀만 흰색으로
+    }
   }
   return img
 }
@@ -29,6 +44,13 @@ describe('ExpWatcher', () => {
     const w = new ExpWatcher()
     w.update(strip('1234', 200))
     expect(w.update(strip('1234', 201)).changed).toBe(false)
+  })
+
+  it('뒤에 비치는 불꽃·일렁임이 매 프레임 바뀌어도 숫자가 그대로면 변화 없음', () => {
+    const w = new ExpWatcher()
+    w.update(strip('1234', 200, 1))
+    for (let seed = 2; seed < 10; seed++) expect(w.update(strip('1234', 200, seed)).diffPx).toBe(0)
+    expect(w.update(strip('1267', 200, 11)).changed).toBe(true) // 효과 중에도 숫자 변화는 잡는다
   })
 })
 
