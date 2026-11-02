@@ -19,6 +19,8 @@ interface Props {
   title: string
   snapshot: HTMLCanvasElement
   withDigits: boolean
+  /** 숫자 영역을 매칭에서 빼기만 하고 읽지 않는다(무아 스택 숫자처럼 바뀌지만 시간이 아닌 숫자) */
+  maskOnly?: boolean
   bank: DigitBank
   onBankRule: (patch: Partial<TextRule>) => void
   onSave: (r: EditorResult) => void
@@ -182,8 +184,9 @@ export function TemplateEditor(p: Props) {
         height: icon.h,
         digitRect: digits ? { x: digits.x - icon.x, y: digits.y - icon.y, w: digits.w, h: digits.h } : null,
         ...(p.withDigits ? {} : { bgTolerance: bgTol }),
+        ...(p.maskOnly && digits ? { readDigits: false } : {}),
       },
-      learnText: digits && learnText.trim() ? learnText.trim() : null,
+      learnText: !p.maskOnly && digits && learnText.trim() ? learnText.trim() : null,
     })
   }
 
@@ -235,7 +238,10 @@ export function TemplateEditor(p: Props) {
           <>
             <p className="hint">
               {step === 'icon' && '2. 아이콘 테두리에 딱 맞게 드래그하세요. (초록)'}
-              {step === 'digits' && '3. 아이콘 위 남은 시간 숫자 부분만 드래그하세요. (주황) 이 부분은 매칭에서 제외되고 숫자 인식에 쓰입니다.'}
+              {step === 'digits' &&
+                (p.maskOnly
+                  ? '3. 아이콘 위 스택 숫자 부분을 드래그하세요. (주황) 이 부분은 매칭에서 빼서 숫자가 바뀌어도 같은 아이콘으로 찾습니다.'
+                  : '3. 아이콘 위 남은 시간 숫자 부분만 드래그하세요. (주황) 이 부분은 매칭에서 제외되고 숫자 인식에 쓰입니다.')}
               {step === 'learn' && '4. 지금 아이콘에 보이는 숫자를 그대로 입력하면 글꼴을 학습합니다. (선택)'}
             </p>
             <div className="zoom-wrap">
@@ -250,7 +256,7 @@ export function TemplateEditor(p: Props) {
                   if (step === 'icon') setIcon(rr)
                   else if (step === 'digits') {
                     setDigits(rr)
-                    setStep('learn')
+                    if (!p.maskOnly) setStep('learn')
                   }
                 }}
               />
@@ -300,13 +306,14 @@ export function TemplateEditor(p: Props) {
           )}
           {step === 'icon' && icon && p.withDigits && (
             <>
-              <button onClick={() => setStep('digits')}>다음: 숫자 영역</button>
+              <button onClick={() => setStep('digits')}>{p.maskOnly ? '다음: 스택 숫자 영역' : '다음: 숫자 영역'}</button>
               <button className="ghost" onClick={save}>
                 숫자 없이 저장
               </button>
             </>
           )}
           {step === 'icon' && icon && !p.withDigits && <button onClick={save}>저장</button>}
+          {step === 'digits' && p.maskOnly && digits && <button onClick={save}>저장</button>}
           {step === 'learn' && (
             <>
               <button className="ghost" onClick={() => setStep('digits')}>

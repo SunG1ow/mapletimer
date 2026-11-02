@@ -3,12 +3,13 @@
 import {
   ALERT_BEFORE_MAX,
   ALERT_BEFORE_MIN,
+  type CombatAlert,
   type HuntStopAlert,
   type RuneAlert,
   type TemplateData,
   type TimedAlert,
 } from '../config'
-import type { HuntStatus, TargetStatus } from '../app/engine'
+import type { CombatStatus, HuntStatus, TargetStatus } from '../app/engine'
 import { formatSec } from '../core/time'
 
 function Toggle(p: { on: boolean; onChange: (v: boolean) => void }) {
@@ -267,6 +268,72 @@ export function HuntRow(p: {
       <div className="cell">
         <label>음성</label>
         <input className="speech" value={h.speech} onChange={(e) => set({ speech: e.target.value })} />
+      </div>
+    </div>
+  )
+}
+
+export function CombatRow(p: {
+  combat: CombatAlert
+  profile: string | null
+  status: CombatStatus | null
+  active: boolean
+  onChange: (c: CombatAlert) => void
+  onEdit: () => void
+  onClear: () => void
+}) {
+  const c = p.combat
+  const list = p.profile ? c.templates[p.profile] : undefined
+  const st = p.status
+  const set = (patch: Partial<CombatAlert>) => p.onChange({ ...c, ...patch })
+  const remaining = st?.remainingSec
+  const label = !list?.length
+    ? { cls: 'muted', label: '템플릿 없음' }
+    : !p.active || !c.enabled
+      ? { cls: 'muted', label: '대기' }
+      : !st
+        ? { cls: 'muted', label: '…' }
+        : st.buffOn
+          ? { cls: 'ok', label: `무아 보임 ${st.score.toFixed(2)}` }
+          : { cls: 'muted', label: `무아 없음 (${st.score.toFixed(2)})` }
+  return (
+    <div className={`row ${c.enabled ? '' : 'off'}`}>
+      <Toggle on={c.enabled} onChange={(enabled) => set({ enabled })} />
+      <Thumb list={list} onAdd={p.onEdit} onClear={p.onClear} disabled={!p.active} addLabel="모양 추가" />
+      <div className="row-main">
+        <strong>무아(공격 시 갱신 버프)</strong>
+        <div className="row-sub">
+          <span className={label.cls}>{label.label}</span>
+          {st && st.remainingSec === null && !st.buffOn && <span className="muted">전투 아님</span>}
+        </div>
+      </div>
+      <div className="cell">
+        <label>끊기기까지</label>
+        <strong className={remaining != null && remaining <= c.alertBeforeSec ? 'warn' : ''}>
+          {remaining != null ? `${remaining.toFixed(0)}초` : '--'}
+        </strong>
+      </div>
+      <div className="cell">
+        <label>전투 유지 / 무아 유지</label>
+        <span>
+          <NumberField value={c.keepSec} min={2} max={120} onChange={(keepSec) => set({ keepSec })} suffix="초 /" width={44} />{' '}
+          <NumberField value={c.buffSec} min={0} max={60} onChange={(buffSec) => set({ buffSec })} suffix="초" width={44} />
+        </span>
+      </div>
+      <div className="cell">
+        <label>알림 시점</label>
+        <NumberField
+          value={c.alertBeforeSec}
+          min={0}
+          max={Math.max(0, c.keepSec - c.buffSec)}
+          onChange={(alertBeforeSec) => set({ alertBeforeSec })}
+          suffix="초 전"
+          width={44}
+        />
+      </div>
+      <div className="cell">
+        <label>음성</label>
+        <input className="speech" value={c.speech} onChange={(e) => set({ speech: e.target.value })} />
       </div>
     </div>
   )

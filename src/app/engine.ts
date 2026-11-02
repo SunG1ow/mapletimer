@@ -5,7 +5,7 @@ import { MAX_GLYPH_DISTANCE } from '../core/digits'
 import type { Rgba } from '../core/image'
 import { parseRemaining } from '../core/time'
 import type { ExpChange } from '../core/expwatch'
-import { HuntStopTracker, PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
+import { CombatTracker, HuntStopTracker, PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
 import type { Detection } from '../detector'
 import { fireAlert } from './sound'
 
@@ -33,14 +33,24 @@ export interface HuntStatus {
   diffPx: number
 }
 
+export interface CombatStatus {
+  /** 이번 프레임에 무아 아이콘이 보임 */
+  buffOn: boolean
+  score: number
+  /** 전투 상태가 끊기기까지 남은 시간(초). 모르거나 이미 끊겼으면 null */
+  remainingSec: number | null
+}
+
 export interface EngineSnapshot {
   at: number
   frameMs: number
   targets: Record<string, TargetStatus>
   hunt: HuntStatus | null
+  combat: CombatStatus | null
 }
 
 export const RUNE_ID = 'rune'
+export const COMBAT_ID = 'combat'
 
 function timedOptions(a: TimedAlert): TimedOptions {
   return {
@@ -78,8 +88,9 @@ export class Engine {
   private timed = new Map<string, TimedTracker>()
   private rune: PresenceTracker
   private lastEvents = new Map<string, { ev: string; at: number }>()
-  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null }
+  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null, combat: null }
   private hunt = new HuntStopTracker({ stopSec: 60, repeatSec: 15 })
+  private combat = new CombatTracker({ keepSec: 14, buffSec: 5, alertBeforeSec: 3 })
   private pending: { suffix: string; names: string[]; pattern?: number[] }[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
   private onChange: (s: EngineSnapshot) => void = () => {}
@@ -108,12 +119,16 @@ export class Engine {
     this.rune.setOptions(runeOptions(s))
     this.hunt.setOptions({ stopSec: s.huntStop.stopSec, repeatSec: s.huntStop.repeatSec })
     if (!s.huntStop.enabled) this.hunt.reset()
+    const c = s.combat
+    this.combat.setOptions({ keepSec: c.keepSec, buffSec: c.buffSec, alertBeforeSec: c.alertBeforeSec })
+    if (!c.enabled) this.combat.reset()
   }
 
   reset() {
     this.timed.forEach((t) => t.reset())
     this.rune.reset()
     this.hunt.reset()
+    this.combat.reset()
   }
 
   private alert(text: string, pattern?: number[]) {
@@ -151,10 +166,20 @@ export class Engine {
   handle(detections: Detection[], frameMs: number, now = Date.now(), exp: ExpChange | null = null) {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
+    let combat = this.snapshot.combat
     for (const d of detections) {
       // 판단 보류된 프레임은 추적기에 넣지 않는다(없음으로 세면 가짜 '종료'/'룬' 알림이 날 수 있다).
       if (d.skipped) {
         if (d.id === RUNE_ID && targets[d.id]) targets[d.id] = { ...targets[d.id], covered: true }
+        continue
+      }
+      if (d.id === COMBAT_ID) {
+        if (!this.settings.combat.enabled) continue
+        for (const ev of this.combat.update(d.found, now)) {
+          if (ev === 'alert') this.alert(this.settings.combat.speech || '공격', [880, 880])
+          else this.onLog('전투 상태 끊겼을 수 있음')
+        }
+        combat = { buffOn: d.found, score: d.score, remainingSec: this.combat.remainingSec(now) }
         continue
       }
       if (d.id === RUNE_ID) {
@@ -195,7 +220,8 @@ export class Engine {
       }
       hunt = { idleSec: this.hunt.idleSec(now), stopped: this.hunt.stopped, diffPx: exp.diffPx }
     }
-    this.snapshot = { at: now, frameMs, targets, hunt }
+    if (!this.settings.combat.enabled) combat = null
+    this.snapshot = { at: now, frameMs, targets, hunt, combat }
     this.onChange(this.snapshot)
   }
 }

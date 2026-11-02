@@ -63,6 +63,22 @@ export interface HuntStopAlert {
   region: Rect
 }
 
+/**
+ * 전투 유지 알림: 공격할 때마다 갱신되고 마지막 공격 buffSec초 뒤 사라지는 버프(링크 스킬 '무아')로 공격 여부를 본다.
+ * 아이콘이 보였던 마지막 순간에서 buffSec초 전에는 공격이 있었으므로, 전투 상태는 그때부터 keepSec초 동안 유지된다.
+ */
+export interface CombatAlert {
+  enabled: boolean
+  templates: Templates
+  /** 마지막 공격 뒤 전투 상태가 유지되는 시간(초) */
+  keepSec: number
+  /** 마지막 공격 뒤 버프 아이콘이 남아 있는 시간(초) */
+  buffSec: number
+  /** 전투 상태가 끊기기 이 시간(초) 전에 알림 */
+  alertBeforeSec: number
+  speech: string
+}
+
 export const DEFAULT_HUNT_REGION: Rect = { x: 0, y: 0.987, w: 0.68, h: 0.013 }
 
 export interface Regions {
@@ -86,6 +102,7 @@ export interface Settings {
   timed: TimedAlert[]
   rune: RuneAlert
   huntStop: HuntStopAlert
+  combat: CombatAlert
   profiles: Record<string, Profile>
 }
 
@@ -125,6 +142,7 @@ export function defaultSettings(): Settings {
     timed: [newTimedAlert('skill', '솔 야누스 : 새벽')],
     rune: { enabled: true, templates: {}, repeatSec: 30, checkSec: 1, matchRatio: 0.65, speech: '룬' },
     huntStop: { enabled: true, stopSec: 60, repeatSec: 15, speech: '사냥 멈춤', region: DEFAULT_HUNT_REGION },
+    combat: { enabled: true, templates: {}, keepSec: 14, buffSec: 5, alertBeforeSec: 3, speech: '공격' },
     profiles: {},
   }
 }
@@ -149,6 +167,7 @@ export function resolveProfile(s: Settings, width: number, height: number): stri
   const keys = new Set<string>(Object.keys(s.profiles))
   for (const a of s.timed) for (const [k, v] of Object.entries(a.templates)) if (v.length) keys.add(k)
   for (const [k, v] of Object.entries(s.rune.templates)) if (v.length) keys.add(k)
+  for (const [k, v] of Object.entries(s.combat.templates)) if (v.length) keys.add(k)
   if (keys.has(exact)) return exact
   let best: string | null = null
   let bestD = Infinity

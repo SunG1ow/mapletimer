@@ -35,6 +35,11 @@ export interface TargetSpec {
   intervalMs?: number
   /** region 안에서 미니맵 창을 찾아 그 안만 탐색(룬). 못 찾으면 region 전체 */
   withinMinimap?: boolean
+  /**
+   * 안 보일 때 전체 재탐색 간격(ms). 없으면 RESCAN_MS. 공격할 때만 몇 초 나타나는 버프(무아)는 3초 간격이면
+   * 다른 대상과 순서를 다투다 놓칠 수 있어 더 자주 본다.
+   */
+  rescanMs?: number
 }
 
 /**
@@ -204,7 +209,7 @@ export class Detector {
     }
     const keptNear = !!m
     // 간격 검사 대상(룬)은 미니맵 안만 보므로 싸서 예산과 무관하게 매번 전체 탐색.
-    const wantFull = !m && (t.last || t.intervalMs || now - t.lastFullSearch >= RESCAN_MS)
+    const wantFull = !m && (t.last || t.intervalMs || now - t.lastFullSearch >= (t.rescanMs ?? RESCAN_MS))
     let skipped = false
     if (wantFull && (t.intervalMs || this.budget > 0)) {
       if (!t.intervalMs) this.budget--

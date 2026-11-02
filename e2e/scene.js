@@ -18,7 +18,7 @@
     g.fillStyle = '#fff'; g.fillRect(4, 4, 3, 3)
     return c
   }
-  const janus = makeIcon(34, 260), buff = makeIcon(32, 30), rune = makeDiamond()
+  const janus = makeIcon(34, 260), buff = makeIcon(32, 30), rune = makeDiamond(), mua = makeIcon(30, 120)
   const bg = document.createElement('canvas'); bg.width = W; bg.height = H
   { const g = bg.getContext('2d'); const img = g.createImageData(W, H); let s = 7
     for (let i = 0; i < W * H; i++) { s = (s * 1664525 + 1013904223) >>> 0; const v = s >>> 25; img.data[i*4] = v; img.data[i*4+1] = v * 0.6; img.data[i*4+2] = 40 + (v >> 1); img.data[i*4+3] = 255 }
@@ -28,7 +28,7 @@
     g.fillStyle = '#e6fa50'; g.beginPath(); g.arc(80, 180, 4, 0, 7); g.fill() }
   // buffStyle: 'small' = 하단 m:ss, 'big' = 가운데 큰 ss (1분 미만), 'blink' = 숫자 없이 깜빡임 (5초 이하)
   // exp: 맨 아래 경험치 숫자. expRunning이면 1초마다 오른다(사냥 중).
-  const scene = { exp: 63875526522732, expRunning: false, expTick: 0,  janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900] }
+  const scene = { exp: 63875526522732, expRunning: false, expTick: 0,  janusText: '1:23', buffText: '4:56', buffStyle: 'small', janusEnd: null, buffEnd: null, buffGoneAt: null, rune: false, janusPos: [1500, 900], attacks: [] }
   window.__scene = scene
   function drawText(g, text, x, y, big = false) {
     g.font = big ? 'bold 19px monospace' : 'bold 13px monospace'; g.textBaseline = 'top'; g.lineWidth = 3; g.strokeStyle = '#000'; g.fillStyle = '#e1e65f' // 메이플 숫자처럼 검은 테두리의 노란 글자
@@ -61,6 +61,15 @@
       else if (scene.buffStyle === 'big') drawText(g, scene.buffText, 1803, 37, true)
     }
     if (scene.rune) g.drawImage(rune, 140, 120)
+    // 무아: 공격(attacks에 시각 추가)마다 스택 +1(최대 5), 마지막 공격 5초 뒤 사라짐, 끝 1.5초 깜빡임. 야누스 왼쪽 칸.
+    const last = scene.attacks.length ? scene.attacks[scene.attacks.length - 1] : -Infinity
+    const left = last + 5000 - now
+    if (left > 0 && !(left < 1500 && Math.floor(now / 250) % 2 === 1)) {
+      let stack = 0
+      for (let i = scene.attacks.length - 1; i >= 0 && stack < 5; i--) { if (i < scene.attacks.length - 1 && scene.attacks[i + 1] - scene.attacks[i] >= 5000) break; stack++ }
+      const [mx, my] = [scene.janusPos[0] - 36, scene.janusPos[1] + 2]
+      g.drawImage(mua, mx, my); drawText(g, String(stack), mx + 20, my + 16)
+    }
     // 맨 아래: 노란 경험치 바 + 경험치 숫자(메이플처럼)
     if (scene.expRunning && now - scene.expTick > 1000) { scene.exp += 1234567; scene.expTick = now }
     g.fillStyle = '#1e1e22'; g.fillRect(0, 1066, W, 14)
@@ -70,7 +79,7 @@
   }
   setInterval(draw, 50); draw()
   window.__templates = {
-    janus: janus.toDataURL(), buff: buff.toDataURL(), rune: rune.toDataURL(),
+    janus: janus.toDataURL(), buff: buff.toDataURL(), rune: rune.toDataURL(), mua: mua.toDataURL(),
   }
   navigator.mediaDevices.getDisplayMedia = async () => canvas.captureStream(15)
 })()

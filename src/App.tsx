@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Capture } from './app/capture'
-import { Engine, RUNE_ID, type EngineSnapshot } from './app/engine'
+import { COMBAT_ID, Engine, RUNE_ID, type EngineSnapshot } from './app/engine'
 import { beep, speak, unlockAudio } from './app/sound'
 import { exportSettings, migrate, saveSettingsNow, useSettings } from './app/store'
 import { decodePng, rgbaToDataUrl } from './app/templates'
@@ -17,10 +17,10 @@ import { emptyBank, findRule, learn, learnedChars, segment, type DigitBank } fro
 import { TextRuleControl } from './components/TextRuleControl'
 import { cropRgba, type Rect, type Rgba } from './core/image'
 import type { TargetSpec } from './detector'
-import { HuntRow, RuneRow, TimedRow } from './components/Rows'
+import { CombatRow, HuntRow, RuneRow, TimedRow } from './components/Rows'
 import { TemplateEditor, type EditorResult } from './components/TemplateEditor'
 
-type EditorTarget = { id: string; title: string; withDigits: boolean; snapshot: HTMLCanvasElement }
+type EditorTarget = { id: string; title: string; withDigits: boolean; maskOnly?: boolean; snapshot: HTMLCanvasElement }
 
 function bankOf(s: Settings, profile: string | null): DigitBank {
   return (profile && s.profiles[profile]?.digitBank) || emptyBank()
@@ -78,9 +78,12 @@ export default function App() {
       .map((a) => ({ id: a.id, group: a.group, t: a.templates[profile] }))
     const r = settings.rune
     const rune = r.enabled && r.templates[profile]?.length ? r.templates[profile] : undefined
+    const c = settings.combat
+    const combat = c.enabled && c.templates[profile]?.length ? c.templates[profile] : undefined
     return JSON.stringify({
       timed,
       rune,
+      combat,
       runeRatio: r.matchRatio,
       runeCheckSec: r.checkSec,
       regions: settings.regions,
@@ -96,6 +99,7 @@ export default function App() {
     const cfg = JSON.parse(detectorKey) as {
       timed: { id: string; group: TimedGroup; t: TemplateData[] }[]
       rune?: TemplateData[]
+      combat?: TemplateData[]
       runeRatio: number
       runeCheckSec: number
       expRegion: Rect | null
@@ -120,6 +124,18 @@ export default function App() {
     let cancelled = false
     void (async () => {
       const targets: TargetSpec[] = []
+      if (cfg.combat) {
+        // 무아는 즐겨찾기 버프 칸(야누스 근처, 위치 자유)에 나타나므로 스킬과 같은 영역에서 찾는다.
+        // 공격 뒤 5초만 보이므로 2초마다 다시 찾고, 맨 앞에 두어 전체 탐색 순서도 먼저 받는다.
+        targets.push({
+          id: COMBAT_ID,
+          region: cfg.regions.skill,
+          variants: await variants(cfg.combat),
+          method: 'ncc',
+          threshold: cfg.th,
+          rescanMs: 2000,
+        })
+      }
       for (const a of cfg.timed) {
         targets.push({
           id: a.id,
@@ -172,10 +188,10 @@ export default function App() {
     engine.reset()
   }
 
-  const openEditor = (id: string, title: string, withDigits: boolean) => {
+  const openEditor = (id: string, title: string, withDigits: boolean, maskOnly = false) => {
     const s = captureRef.current?.snapshot()
     if (!s) return setError('화면 공유 중일 때만 등록할 수 있습니다.')
-    setEditor({ id, title, withDigits, snapshot: s })
+    setEditor({ id, title, withDigits, maskOnly, snapshot: s })
   }
 
   const saveEditor = (r: EditorResult) => {
@@ -186,7 +202,9 @@ export default function App() {
     update((s) =>
       id === RUNE_ID
         ? { ...s, rune: { ...s.rune, templates: add(s.rune.templates) } }
-        : { ...s, timed: s.timed.map((a) => (a.id === id ? { ...a, templates: add(a.templates) } : a)) },
+        : id === COMBAT_ID
+          ? { ...s, combat: { ...s.combat, templates: add(s.combat.templates) } }
+          : { ...s, timed: s.timed.map((a) => (a.id === id ? { ...a, templates: add(a.templates) } : a)) },
     )
     const dr = r.template.digitRect
     if (r.learnText && dr) {
@@ -358,6 +376,26 @@ export default function App() {
 
       <section className="card">
         <div className="card-head">
+          <h2>전투 유지 알림</h2>
+          <span className="muted small">무아 아이콘이 사라진 뒤 전투 상태가 끊기기 전에 공격하라고 알립니다</span>
+        </div>
+        <CombatRow
+          combat={settings.combat}
+          profile={profile}
+          status={snap?.combat ?? null}
+          active={active}
+          onChange={(combat) => update((s) => ({ ...s, combat }))}
+          onEdit={() => openEditor(COMBAT_ID, '무아', true, true)}
+          onClear={() =>
+            profile &&
+            confirm(`${profile} 무아 모양을 모두 지울까요?`) &&
+            update((s) => ({ ...s, combat: { ...s.combat, templates: { ...s.combat.templates, [profile]: [] } } }))
+          }
+        />
+      </section>
+
+      <section className="card">
+        <div className="card-head">
           <h2>버프 종료 알림</h2>
           <span className="muted small">우상단 버프 영역에서 찾습니다 (순서 바뀌어도 OK)</span>
           <button className="ghost" onClick={() => addTimed('buff')}>
@@ -404,6 +442,7 @@ export default function App() {
           title={editor.title}
           snapshot={editor.snapshot}
           withDigits={editor.withDigits}
+          maskOnly={editor.maskOnly}
           bank={bank}
           onBankRule={(patch) => profile && update((s) => withBank(s, profile, (b) => ({ ...b, ...patch })))}
           onSave={saveEditor}

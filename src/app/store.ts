@@ -26,6 +26,7 @@ export function migrate(saved: Partial<Settings>): Settings {
     timed: (saved.timed ?? base.timed).map((a) => ({ ...a, templates: normalizeTemplates(a.templates) })),
     rune: { ...base.rune, ...saved.rune, templates: normalizeTemplates(saved.rune?.templates) },
     huntStop: { ...base.huntStop, ...saved.huntStop },
+    combat: { ...base.combat, ...saved.combat, templates: normalizeTemplates(saved.combat?.templates) },
   }
 }
 

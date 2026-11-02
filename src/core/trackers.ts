@@ -298,3 +298,71 @@ export class HuntStopTracker {
     return ev
   }
 }
+
+export interface CombatOptions {
+  keepSec: number
+  buffSec: number
+  alertBeforeSec: number
+}
+
+/** 'alert' = 곧 끊김(알림), 'ended' = 끊겼을 시각이 지남(기록만) */
+export type CombatEvent = 'alert' | 'ended'
+
+/**
+ * 전투 유지: 공격마다 갱신되는 버프 아이콘이 마지막으로 보인 시각으로 마지막 공격 시각을 보수적으로 잡는다.
+ * 아이콘이 보였다면 그 buffSec초 안에 공격이 있었으므로 끊기는 시각은 마지막으로 본 시각 + (keepSec − buffSec).
+ * 보인 동안 더 최근에 공격했을 수도 있으니 실제보다 늦게 알리는 일은 없다. 아이콘이 끝무렵 깜빡여도
+ * 꺼진 프레임은 '마지막으로 본 시각'을 앞당기기만 하므로(알림이 조금 빨라질 뿐) 따로 처리하지 않는다.
+ */
+export class CombatTracker {
+  private lastSeen: number | null = null
+  private fired = false
+  private ended = false
+  private opts: CombatOptions
+
+  constructor(opts: CombatOptions) {
+    this.opts = opts
+  }
+
+  setOptions(opts: CombatOptions) {
+    this.opts = opts
+  }
+
+  reset() {
+    this.lastSeen = null
+    this.fired = false
+    this.ended = false
+  }
+
+  private deadline(): number | null {
+    if (this.lastSeen === null) return null
+    return this.lastSeen + Math.max(0, this.opts.keepSec - this.opts.buffSec) * 1000
+  }
+
+  /** 끊기기까지 남은 시간(초). 한 번도 못 봤거나 이미 끊겼으면 null */
+  remainingSec(now: number): number | null {
+    const d = this.deadline()
+    return d === null || this.ended ? null : Math.max(0, (d - now) / 1000)
+  }
+
+  update(found: boolean, now: number): CombatEvent[] {
+    const ev: CombatEvent[] = []
+    if (found) {
+      this.lastSeen = now
+      this.fired = false
+      this.ended = false
+      return ev
+    }
+    const d = this.deadline()
+    if (d === null) return ev
+    if (!this.fired && !this.ended && now >= d - this.opts.alertBeforeSec * 1000) {
+      this.fired = true
+      ev.push('alert')
+    }
+    if (!this.ended && now >= d) {
+      this.ended = true
+      ev.push('ended')
+    }
+    return ev
+  }
+}
