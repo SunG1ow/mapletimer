@@ -258,7 +258,8 @@ export class Engine {
         // 7.5초마다 울리므로 기록에는 남기지 않고, 박자를 잡거나 놓칠 때만 남긴다.
         if (ev === 'alert') this.spawnAlert(sp.speech)
         else if (ev === 'locked') this.onLog(`젠 박자 잡음 (${this.spawn.status(now).periodSec.toFixed(2)}초)`)
-        else if (ev === 'lost') this.onLog('젠 박자 놓침 — 다시 찾는 중')
+        else if (ev === 'lost') this.onLog('젠이 안 보여 젠 알림 쉼 (박자는 기억)')
+        else if (ev === 'resumed') this.onLog('젠 알림 다시 시작')
       }
       spawn = { ...this.spawn.status(now), activity: spawnActivity }
       this.scheduleSpawnAlert(now)

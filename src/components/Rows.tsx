@@ -366,10 +366,12 @@ export function SpawnRow(p: {
             <span className="muted">…</span>
           ) : st.locked ? (
             <span className="ok">박자 맞춤 {st.periodSec.toFixed(2)}초</span>
+          ) : st.paused ? (
+            <span className="muted">쉬는 중 — 젠 하나만 보이면 바로 다시 알림</span>
           ) : (
             <span className="muted">박자 찾는 중 (젠 3번 필요)</span>
           )}
-          {st?.locked && st.misses > 0 && <span className="muted">놓침 {st.misses}번</span>}
+          {st?.locked && st.blind > 0 && <span className="muted">이벤트 등으로 안 보여 박자대로 {st.blind}번</span>}
           {st?.activity != null && <span className="muted">변화 {st.activity.toFixed(0)}</span>}
         </div>
       </div>

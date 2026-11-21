@@ -71,14 +71,14 @@ describe('SpawnTracker — 변수', () => {
     for (const a of alerts) expect((a + 500 - 2000) % 7500).toBe(0)
   })
 
-  it('젠을 몇 번 못 봐도(가려짐) 박자대로 계속 알리고, 4번 연속 놓치면 멈춘다', () => {
+  it('화면이 바빠 젠을 못 봐도 박자대로 계속 알리고, 조용한데 3번 연속 없으면 쉰다', () => {
     // 25~40초 젠 2번은 화면이 계속 시끄러워 안 보임, 50초부터는 사냥 끝(계속 조용)
     const acts = synth(80000, 7500, 2000, (t) => (t >= 50000 ? 5 : t >= 25000 && t < 40000 ? 35 : null))
     const out = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }), acts, 250)
     const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
     expect(alerts).toContain(31500) // 32초 젠은 못 봤지만 알림
     const lost = out.find((e) => e.ev === 'lost')!
-    expect(lost.at).toBeGreaterThan(70000)
+    expect(lost.at).toBeGreaterThanOrEqual(69000) // 50초부터 조용: 54.5, 62, 69.5초 젠이 없음
     expect(alerts.every((a) => a < lost.at)).toBe(true)
   })
 
@@ -102,5 +102,56 @@ describe('SpawnTracker.nextAlertAt', () => {
     expect(t.update(null, due - 1)).toEqual([])
     expect(t.update(null, due)).toEqual(['alert'])
     expect(t.nextAlertAt()).toBeCloseTo(due + 7500, -1)
+  })
+})
+
+describe('SpawnTracker — 이벤트 뒤 회복(실사용: 이벤트 때마다 박자를 버려 절반가량 놓침)', () => {
+  const opts = { periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }
+  /** 젠 시각 위상(ms): 2000 + 7500k 에서 alertBefore 0.5초 */
+  const onBeat = (a: number) => (a + 500 - 2000) % 7500 === 0
+
+  it('이벤트로 1분 넘게 화면이 계속 바빠도 박자를 버리지 않고 알림을 이어 간다', () => {
+    // 20~95초: 이벤트 몹이 3초마다 나와 화면이 계속 바쁨(조용한 틈 없음, 3초마다 큰 터짐)
+    const acts = synth(130000, 7500, 2000, (t) => (t >= 20000 && t < 95000 ? (t % 3000 === 0 ? 60 : 35) : null))
+    const out = run(new SpawnTracker(opts), acts, 250)
+    expect(out.filter((e) => e.ev === 'lost')).toEqual([])
+    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
+    expect(alerts.every(onBeat)).toBe(true)
+    // 박자 잡은 17초 젠 뒤로 끝까지 모든 젠에 알림
+    const expected = Array.from({ length: 15 }, (_, k) => 2000 + 7500 * (k + 3) - 500).filter((a) => a < 130000)
+    expect(alerts).toEqual(expected)
+    // 이벤트가 끝나면 다시 젠을 본다
+    expect(out.some((e) => e.ev === 'spawn' && e.at > 95000)).toBe(true)
+  })
+
+  it('쉬었다가(마을 등) 같은 사냥터로 돌아오면 젠 하나로 바로 다시 알린다', () => {
+    // 40~80초 조용(사냥 안 함) → 80초부터 다시 사냥(서버 젠 박자는 그대로)
+    const acts = synth(120000, 7500, 2000, (t) => (t >= 40000 && t < 80000 ? 5 : null))
+    const out = run(new SpawnTracker(opts), acts, 250)
+    const lost = out.find((e) => e.ev === 'lost')!
+    const resumed = out.find((e) => e.ev === 'resumed')!
+    expect(lost.at).toBeGreaterThan(40000)
+    expect(resumed.at).toBe(84500) // 80초 뒤 첫 젠(84.5초)
+    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
+    expect(alerts.filter((a) => a > lost.at && a < resumed.at)).toEqual([])
+    expect(alerts.filter((a) => a > resumed.at)).toEqual([91500, 99000, 106500, 114000])
+  })
+
+  it('박자를 찾는 중 젠 사이에 이벤트 터짐이 끼어도 잡는다', () => {
+    // 처음부터 젠 사이(젠 5초 뒤)마다 이벤트 터짐
+    const acts = synth(40000, 7500, 2000, (t) => ((t - 2000) % 7500 === 5000 ? 60 : null))
+    const out = run(new SpawnTracker(opts), acts, 250)
+    expect(out.find((e) => e.ev === 'locked')!.at).toBe(17000)
+  })
+
+  it('다른 사냥터(다른 박자)로 옮기면 새 박자를 잡는다', () => {
+    const first = synth(40000, 7500, 2000)
+    // 40~55초 이동(조용), 55초부터 위상이 3초 다른 박자
+    const second = synth(60000, 7500, 18000).map((a, i) => (i * 250 < 15000 ? 5 : a))
+    const out = run(new SpawnTracker(opts), [...first, ...second], 250)
+    const locks = out.filter((e) => e.ev === 'locked').map((e) => e.at)
+    expect(locks).toHaveLength(2)
+    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at).filter((a) => a > locks[1])
+    for (const a of alerts) expect((a + 500 - 40000 - 18000) % 7500).toBe(0)
   })
 })
