@@ -5,7 +5,7 @@ import { MAX_GLYPH_DISTANCE } from '../core/digits'
 import type { Rgba } from '../core/image'
 import { parseRemaining } from '../core/time'
 import type { ExpChange } from '../core/expwatch'
-import { SpawnTracker, type SpawnStatus } from '../core/spawn'
+import { SpawnTracker, type SpawnLogRow, type SpawnStatus } from '../core/spawn'
 import { CombatTracker, HuntStopTracker, PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
 import type { Detection } from '../detector'
 import { fireAlert } from './sound'
@@ -148,6 +148,11 @@ export class Engine {
     fireAlert(text, { volume: s.volume, speech: s.speechEnabled, desktop: s.notifyEnabled }, pattern)
   }
 
+  /** 젠 감지 기록(최근 30분, 프레임마다 변화량과 판정) */
+  spawnLog(): SpawnLogRow[] {
+    return this.spawn.getLog()
+  }
+
   /** 다음 프레임보다 먼저 올 젠 알림은 타이머로 제 시각에 울린다. */
   private scheduleSpawnAlert(now: number) {
     if (this.spawnTimer) clearTimeout(this.spawnTimer)
@@ -257,7 +262,7 @@ export class Engine {
       for (const ev of this.spawn.update(spawnActivity, now)) {
         // 7.5초마다 울리므로 기록에는 남기지 않고, 박자를 잡거나 놓칠 때만 남긴다.
         if (ev === 'alert') this.spawnAlert(sp.speech)
-        else if (ev === 'locked') this.onLog(`젠 박자 잡음 (${this.spawn.status(now).periodSec.toFixed(2)}초)`)
+        else if (ev === 'locked') this.onLog(`젠 박자 잡음 (${this.spawn.status(now).periodSec.toFixed(2)}초, 젠 ${this.spawn.status(now).support}번 기준)`)
         else if (ev === 'lost') this.onLog('젠이 안 보여 젠 알림 쉼 (박자는 기억)')
         else if (ev === 'resumed') this.onLog('젠 알림 다시 시작')
       }

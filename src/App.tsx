@@ -386,6 +386,34 @@ export default function App() {
           status={snap?.spawn ?? null}
           active={active}
           onChange={(spawn) => update((s) => ({ ...s, spawn }))}
+          onExport={() => {
+            const rows = engine.spawnLog()
+            if (!rows.length) return setError('아직 젠 기록이 없습니다. 화면 공유 중 사냥한 뒤 내보내세요.')
+            const t0 = rows[0].t
+            const st = snap?.spawn
+            const head = [
+              `# 메이플 타이머 젠 기록 ${new Date(t0).toLocaleString()} ~ ${new Date(rows[rows.length - 1].t).toLocaleTimeString()}`,
+              `# 설정 주기 ${settings.spawn.periodSec}초, 알림 ${settings.spawn.alertBeforeSec}초 전` +
+                (st?.locked || st?.paused ? `, 찾은 주기 ${st.periodSec.toFixed(3)}초 (젠 ${st.support}번 기준)` : ''),
+              '# 판정: spawn=젠(박자 맞음) ignored=젠 같은데 박자와 안 맞음 weak=오르다 만 변화 locked=박자 잡음/바뀜 lost=알림 쉼 resumed=다시 알림 alert=알림',
+              '시각,경과초,변화값,판정',
+            ]
+            const clock = (t: number) => {
+              const d = new Date(t)
+              const p2 = (n: number) => String(n).padStart(2, '0')
+              return `${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, '0')}`
+            }
+            const body = rows.map(
+              (r) =>
+                `${clock(r.t)},` +
+                `${((r.t - t0) / 1000).toFixed(2)},${r.activity === null ? '' : r.activity.toFixed(1)},${r.events.join(' ')}`,
+            )
+            const blob = new Blob(['\ufeff' + [...head, ...body].join('\n')], { type: 'text/csv' })
+            const a = document.createElement('a')
+            a.href = URL.createObjectURL(blob)
+            a.download = `mapletimer-spawn-${new Date(t0).toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`
+            a.click()
+          }}
         />
       </section>
 

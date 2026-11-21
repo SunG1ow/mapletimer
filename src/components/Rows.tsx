@@ -347,6 +347,7 @@ export function SpawnRow(p: {
   status: EngineSnapshot['spawn']
   active: boolean
   onChange: (s: SpawnAlert) => void
+  onExport: () => void
 }) {
   const sp = p.spawn
   const st = p.status
@@ -365,7 +366,9 @@ export function SpawnRow(p: {
           ) : !st ? (
             <span className="muted">…</span>
           ) : st.locked ? (
-            <span className="ok">박자 맞춤 {st.periodSec.toFixed(2)}초</span>
+            <span className="ok">
+              박자 맞춤 {st.periodSec.toFixed(2)}초 (젠 {st.support}번 기준)
+            </span>
           ) : st.paused ? (
             <span className="muted">쉬는 중 — 젠 하나만 보이면 바로 다시 알림</span>
           ) : (
@@ -373,6 +376,9 @@ export function SpawnRow(p: {
           )}
           {st?.locked && st.blind > 0 && <span className="muted">이벤트 등으로 안 보여 박자대로 {st.blind}번</span>}
           {st?.activity != null && <span className="muted">변화 {st.activity.toFixed(0)}</span>}
+          <button className="link" onClick={p.onExport} title="최근 30분의 프레임별 변화값과 젠 판정을 파일로 받습니다">
+            기록 내보내기
+          </button>
         </div>
       </div>
       <div className="cell">

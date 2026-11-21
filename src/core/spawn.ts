@@ -39,33 +39,41 @@ export class ActivityWatcher {
   }
 }
 
-/** 이 값 이상 변하면 '터짐'(실측 젠 순간 30~56) */
-const BURST = 30
-/** 직전 1초 평균이 이 값 미만이면 '조용함'(실측 젠 직전 4~10, 사냥 중 20~45) */
+/** 조용함: 이 값 미만(실측 6~8, 영상 녹화는 잡음 때문에 최대 18) */
 const QUIET = 12
-const QUIET_MS = 1000
-/** 한 번 젠을 본 뒤 이 시간 안의 터짐은 같은 젠 */
-const REFRACTORY_MS = 2000
-/** 예상 젠 시각과 이만큼 안쪽이면 젠으로 받아들인다(4fps 표본 오차 ±0.13초 + 서버 랙). 넓으면 이벤트 터짐이 박자를 끌고 간다 */
-const WINDOW_MS = 500
-/** 박자를 처음 잡을 때: 젠 후보 셋의 간격이 주기의 정수배와 이만큼 안쪽 */
-const LOCK_TOL_MS = 600
+/** 젠 직전에 조용함이 이만큼 이어져야 한다(4fps에서 3프레임) */
+const QUIET_RUN_MS = 500
+/** 조용하다가 이 값을 넘으면 '오르기 시작' */
+const RISE = 20
 /**
- * 예상 젠 시각 앞뒤로 화면이 '조용했는데도' 젠이 안 보인 횟수가 이만큼 이어지면 사냥을 멈춘 것으로 보고 알림을 쉰다.
- * 화면이 바빠(이벤트 몹·이벤트 스킬) 젠을 못 본 것은 세지 않는다: 실사용에서 이벤트 때마다 박자를 버려 절반가량 놓쳤다.
+ * 오르기 시작한 뒤 이 시간 안에 PEAK 이상까지 올라야 젠. 실사용 관찰: 젠은 어떤 상황이든 30·35를 거쳐 45(가끔 50)까지,
+ * 이벤트는 높아도 30 정도. 녹화 영상에서는 젠 순간 바로 45~81.
  */
+const PEAK = 40
+const PEAK_WITHIN_MS = 1250
+/**
+ * 박자: 최근 젠들 시각을 주기로 접었을 때 이만큼 안에 모이면 같은 박자(4fps 표본 오차 ±0.13초 + 서버 랙).
+ * 젠마다 조금씩 고쳐 나가면 엉뚱한 젠 하나가 주기를 비틀어 계속 밀렸다(실사용: 6번째쯤부터 복구 불가).
+ * 그래서 매번 최근 젠 전체로 주기·위상을 다시 고른다(가장 많이 맞는 쪽). 섞인 이벤트 터짐은 표가 모이지 않는다.
+ */
+const PHASE_TOL_MS = 250
+/** 이 시간 안의 젠만 박자 계산에 쓴다. 가까운 젠일수록 무겁게(반감기) */
+const ONSET_KEEP_MS = 240000
+const HALF_LIFE_MS = 60000
+/** 박자를 잡는 데 필요한 같은 박자의 젠 수 */
+const MIN_SUPPORT = 3
+/** 주기는 설정값의 ±6% 안에서 2ms 단위로 찾는다(7.5초 → 7.05~7.95초. 처음 짐작 7.2초, 실측 7.53초) */
+const PERIOD_RANGE = 0.06
+const PERIOD_STEP_MS = 2
+/** 예상 젠 시각 앞뒤로 화면이 '조용했는데도' 젠이 없는 일이 이만큼 이어지면 사냥을 멈춘 것으로 보고 알림을 쉰다 */
 const MAX_QUIET_MISSES = 3
-/** 젠을 이 시간 넘게 한 번도 못 보면(주기 오차가 쌓임) 알림을 쉰다 */
-const MAX_BLIND_MS = 180000
-/**
- * 화면에 젠이 보인 뒤 프레임이 분석에 들어오기까지의 지연. 녹화 영상을 앱에 넣어 잰 알림이 설정보다 평균 0.1초 늦었다.
- */
-const CAPTURE_LATENCY_MS = 100
-/** 주기는 설정값에서 이 비율 안에서만 스스로 고친다 */
-const PERIOD_ADJUST = 0.1
+/** 화면에 젠이 보인 뒤 프레임이 분석에 들어오기까지의 지연. 녹화 영상을 앱에 넣어 재 보니 보정 0이면 알림이 평균 0.1초 늦고, 0.1초면 0.1초 일렀다. */
+const CAPTURE_LATENCY_MS = 50
+/** 기록 내보내기용으로 남기는 프레임 수(4fps 30분) */
+const LOG_MAX = 7200
 
 export interface SpawnOptions {
-  /** 젠 주기(초). 처음 박자를 잡을 때 기준, 이후 실측으로 조금씩 고친다 */
+  /** 젠 주기(초). 박자를 찾을 때 이 값의 ±6% 안에서 실제 주기를 찾는다 */
   periodSec: number
   /** 젠 이 시간(초) 전에 알림 */
   alertBeforeSec: number
@@ -74,212 +82,293 @@ export interface SpawnOptions {
 }
 
 /**
- * spawn = 박자에 맞는 젠을 봄, ignored = 박자와 안 맞는 터짐, locked = 박자 잡음,
- * lost = 사냥을 멈춘 듯해 알림 쉼(박자는 기억), resumed = 기억한 박자에 맞는 젠을 다시 봐 알림 재개, alert = 알림
+ * spawn = 젠을 봄(박자에 맞음), ignored = 젠 같은데 박자와 안 맞음, weak = 오르다 만 변화(이벤트 등),
+ * locked = 박자 잡음/바뀜, lost = 사냥을 멈춘 듯해 알림 쉼(박자는 기억), resumed = 다시 알림, alert = 알림
  */
-export type SpawnEvent = 'spawn' | 'ignored' | 'locked' | 'lost' | 'resumed' | 'alert'
+export type SpawnEvent = 'spawn' | 'ignored' | 'weak' | 'locked' | 'lost' | 'resumed' | 'alert'
 
 export interface SpawnStatus {
   locked: boolean
   /** 박자는 기억하지만 알림을 쉬는 중 */
   paused: boolean
+  /** 찾은 주기(초). 박자를 못 잡았으면 설정값 */
   periodSec: number
+  /** 박자 계산에 맞아든 최근 젠 수 */
+  support: number
   /** 다음 젠까지(초). 박자를 못 잡았으면 null */
   nextInSec: number | null
   /** 화면이 바빠 젠을 못 보고 박자로만 넘긴 횟수(마지막으로 본 젠 이후) */
   blind: number
 }
 
+export interface SpawnLogRow {
+  t: number
+  activity: number | null
+  events: SpawnEvent[]
+}
+
+interface Model {
+  period: number
+  /** 젠 시각 하나(이 시각 + 주기의 정수배가 젠) */
+  ref: number
+  support: number
+}
+
 type Mode = 'search' | 'locked' | 'paused'
 
 export class SpawnTracker {
-  private history: { t: number; a: number }[] = []
-  private lastBurst = -Infinity
-  /** 직전 프레임 시각. 젠은 직전 프레임과 이번 프레임 사이 어딘가에서 일어났으므로 그 가운데로 잡는다 */
-  private lastT: number | null = null
-  private candidates: number[] = []
+  private frames: { t: number; a: number }[] = []
+  private quietStart: number | null = null
+  private lastLowT: number | null = null
+  private rising: { t0: number; until: number } | null = null
+  private onsets: number[] = []
+  private model: Model | null = null
   private mode: Mode = 'search'
-  /** 기준 젠(번호 anchorC)의 시각 */
-  private anchorT = 0
-  private anchorC = 0
-  /** 알림을 세는 기준 젠 번호(N번마다) */
-  private baseC = 0
-  private lastSeenC = 0
-  private lastSeenT = 0
-  private lastAlertC = 0
-  /** 판정이 끝난(창이 지나간) 마지막 젠 번호 */
-  private closedC = 0
-  /** 지금 창이 열린 젠 번호와 그 앞뒤 화면 변화량 합/개수(바빠서 못 본 것인지 가리기용) */
-  private windowC = 0
-  private windowSum = 0
-  private windowN = 0
+  private pausedAt = 0
+  /** N번마다 셈의 기준 젠 시각 */
+  private origin = 0
+  private lastAlertS = -Infinity
+  private lastClosedS = -Infinity
   private quietMisses = 0
   private blind = 0
-  private period: number
+  private log: SpawnLogRow[] = []
   private opts: SpawnOptions
 
   constructor(opts: SpawnOptions) {
     this.opts = opts
-    this.period = opts.periodSec * 1000
   }
 
   setOptions(opts: SpawnOptions) {
-    if (opts.periodSec !== this.opts.periodSec) {
-      this.period = opts.periodSec * 1000
-      this.mode = 'search'
-      this.candidates = []
-    }
+    const refit = opts.periodSec !== this.opts.periodSec
     this.opts = opts
+    if (refit) {
+      this.model = null
+      this.mode = 'search'
+      this.refit(this.lastT())
+    }
   }
 
   reset() {
-    this.history = []
-    this.lastBurst = -Infinity
-    this.lastT = null
+    this.frames = []
+    this.quietStart = null
+    this.lastLowT = null
+    this.rising = null
+    this.onsets = []
+    this.model = null
     this.mode = 'search'
-    this.candidates = []
   }
 
-  private at(c: number) {
-    return this.anchorT + (c - this.anchorC) * this.period
+  private lastT() {
+    return this.frames.length ? this.frames[this.frames.length - 1].t : 0
+  }
+
+  /** 최근 프레임 기록(시각 ms, 변화량, 그 프레임의 판정) */
+  getLog(): SpawnLogRow[] {
+    return this.log
   }
 
   status(now: number): SpawnStatus {
-    const base = { periodSec: this.period / 1000, blind: this.blind }
-    if (this.mode !== 'locked') return { ...base, locked: false, paused: this.mode === 'paused', nextInSec: null }
-    const c = this.anchorC + Math.ceil((now - this.anchorT) / this.period)
-    return { ...base, locked: true, paused: false, nextInSec: (this.at(c) - now) / 1000 }
+    const m = this.model
+    const base = { periodSec: (m?.period ?? this.opts.periodSec * 1000) / 1000, support: m?.support ?? 0, blind: this.blind }
+    if (this.mode !== 'locked' || !m) return { ...base, locked: false, paused: this.mode === 'paused', nextInSec: null }
+    const next = m.ref + Math.ceil((now - m.ref) / m.period) * m.period
+    return { ...base, locked: true, paused: false, nextInSec: (next - now) / 1000 }
   }
 
   /** 다음 알림 시각(ms). 프레임은 0.25초 간격이라 엔진이 이 시각에 맞춰 타이머로 정확히 울린다. */
   nextAlertAt(): number | null {
-    if (this.mode !== 'locked') return null
-    const n = Math.max(1, this.opts.everyN)
-    let c = this.lastAlertC + 1
-    while ((c - this.baseC) % n !== 0) c++
-    return this.at(c) - this.opts.alertBeforeSec * 1000
+    const m = this.model
+    if (this.mode !== 'locked' || !m) return null
+    let k = Math.floor((this.lastAlertS + m.period / 2 - m.ref) / m.period) + 1
+    for (let i = 0; i < 20 && !this.everyOk(m.ref + k * m.period); i++) k++
+    return m.ref + k * m.period - this.opts.alertBeforeSec * 1000
+  }
+
+  private everyOk(spawnT: number) {
+    const n = Math.max(1, Math.round(this.opts.everyN))
+    const k = Math.round((spawnT - this.origin) / this.model!.period)
+    return ((k % n) + n) % n === 0
   }
 
   /** activity = 이번 프레임 변화량(null = 첫 프레임 등 모름) */
   update(activity: number | null, now: number): SpawnEvent[] {
     const ev: SpawnEvent[] = []
-    if (activity !== null) {
-      this.history = this.history.filter((h) => now - h.t <= QUIET_MS)
-      const before = this.history
-      const quiet = before.length >= 2 && before.reduce((s, h) => s + h.a, 0) / before.length < QUIET
-      this.history.push({ t: now, a: activity })
-      if (this.mode !== 'search') this.watchWindow(activity, now)
-      // 박자와 안 맞아 무시한 터짐은 대기 시간을 걸지 않는다(이벤트 몹 바로 뒤 진짜 젠을 놓치지 않게).
-      const at = (this.lastT !== null && now - this.lastT < 1000 ? (this.lastT + now) / 2 : now) - CAPTURE_LATENCY_MS
-      if (activity >= BURST && quiet && at - this.lastBurst > REFRACTORY_MS && this.onBurst(at, ev)) this.lastBurst = at
-      this.lastT = now
+    if (activity !== null) this.detect(activity, now, ev)
+    const m = this.model
+    if (this.mode === 'locked' && m) {
+      this.closeWindow(now, m, ev)
+      if (this.mode === 'locked') {
+        // 알림 시각이 지난 가장 최근 젠. 1초 넘게 늦었으면(창이 멈췄다 돌아옴 등) 건너뛴다.
+        const lead = this.opts.alertBeforeSec * 1000
+        const s = m.ref + Math.floor((now + lead - m.ref) / m.period) * m.period
+        if (s > this.lastAlertS + m.period / 2) {
+          this.lastAlertS = s
+          if (now - (s - lead) < 1000 && this.everyOk(s)) ev.push('alert')
+        }
+      }
     }
-    if (this.mode === 'locked') this.closeWindows(now, ev)
-    if (this.mode !== 'locked') return ev
-    // 알림 시각이 지난 가장 최근 젠. 1초 넘게 늦었으면(창이 멈췄다 돌아옴 등) 건너뛴다.
-    const lead = this.opts.alertBeforeSec * 1000
-    const c = this.anchorC + Math.floor((now + lead - this.anchorT) / this.period)
-    if (c > this.lastAlertC) {
-      this.lastAlertC = c
-      const due = this.at(c) - lead
-      if (now - due < 1000 && (c - this.baseC) % Math.max(1, this.opts.everyN) === 0) ev.push('alert')
-    }
+    this.log.push({ t: now, activity, events: ev })
+    if (this.log.length > LOG_MAX) this.log.splice(0, this.log.length - LOG_MAX)
     return ev
   }
 
-  /** 예상 젠 시각 1.5초 전부터 창 끝까지의 화면 변화량을 모은다. 평균이 높으면 '바빠서 못 봄'. */
-  private watchWindow(activity: number, now: number) {
-    const c = this.anchorC + Math.round((now - this.anchorT) / this.period)
-    const d = now - this.at(c)
-    if (d < -(QUIET_MS + WINDOW_MS) || d > WINDOW_MS) return
-    if (c !== this.windowC) {
-      this.windowC = c
-      this.windowSum = 0
-      this.windowN = 0
+  /** 조용하다가 오르기 시작한 지점을 젠 후보로 잡고, 곧 PEAK까지 오르면 젠으로 확정한다. */
+  private detect(a: number, now: number, ev: SpawnEvent[]) {
+    this.frames.push({ t: now, a })
+    this.frames = this.frames.filter((f) => now - f.t <= 3000)
+    if (this.rising && now > this.rising.until) {
+      this.rising = null
+      ev.push('weak')
     }
-    this.windowSum += activity
-    this.windowN++
-  }
-
-  /** 창이 지나간 젠마다: 봤으면 그만, 바빠서 못 봤으면 박자대로 넘김, 조용한데 없었으면 '멈춤' 쪽으로 센다. */
-  private closeWindows(now: number, ev: SpawnEvent[]) {
-    const lastClosable = this.anchorC + Math.floor((now - WINDOW_MS - this.anchorT) / this.period)
-    for (let c = Math.max(this.closedC, this.lastSeenC) + 1; c <= lastClosable; c++) {
-      this.closedC = c
-      const busy = this.windowC === c && this.windowN > 0 && this.windowSum / this.windowN >= QUIET
-      if (busy) this.blind++
-      else this.quietMisses++
+    if (this.rising && a >= PEAK) {
+      const t0 = this.rising.t0
+      this.rising = null
+      this.onOnset(t0, now, ev)
     }
-    if (this.quietMisses >= MAX_QUIET_MISSES || now - this.lastSeenT > MAX_BLIND_MS) {
-      this.mode = 'paused'
-      this.candidates = []
-      ev.push('lost')
+    if (a < QUIET) {
+      this.quietStart ??= now
+      this.lastLowT = now
+      return
+    }
+    const quietRun = this.quietStart !== null && this.lastLowT !== null ? this.lastLowT - this.quietStart : 0
+    this.quietStart = null
+    if (!this.rising && a >= RISE && quietRun >= QUIET_RUN_MS && this.lastLowT !== null && now - this.lastLowT < 1000) {
+      // 젠은 마지막 조용한 프레임과 이번 프레임 사이 어딘가에서 일어났다.
+      const t0 = (this.lastLowT + now) / 2 - CAPTURE_LATENCY_MS
+      if (a >= PEAK) this.onOnset(t0, now, ev)
+      else this.rising = { t0, until: now + PEAK_WITHIN_MS }
     }
   }
 
-  /** 젠(후보)으로 받아들였으면 true */
-  private onBurst(t: number, ev: SpawnEvent[]): boolean {
-    if (this.mode !== 'search') {
-      const c = this.anchorC + Math.round((t - this.anchorT) / this.period)
-      const err = t - this.at(c)
-      if (Math.abs(err) <= WINDOW_MS && c > this.lastSeenC) {
-        // 주기와 위상을 조금씩 실측에 맞춘다(표본 간격 250ms라 한 번 값은 ±0.13초 흔들린다).
-        const base = this.opts.periodSec * 1000
-        const n = c - this.anchorC
-        this.period = Math.min(base * (1 + PERIOD_ADJUST), Math.max(base * (1 - PERIOD_ADJUST), this.period + (0.3 * err) / n))
-        this.anchorT = t - 0.5 * err
-        this.anchorC = c
-        this.seen(c, t)
-        if (this.mode === 'paused') {
-          // 쉬는 동안 박자를 기억해 두었다가 맞는 젠 하나로 바로 다시 알린다(서버 젠 박자는 그대로다).
-          this.mode = 'locked'
-          this.lastAlertC = c
-          ev.push('resumed')
-        } else ev.push('spawn')
-        return true
+  private onOnset(t0: number, now: number, ev: SpawnEvent[]) {
+    this.onsets = [...this.onsets.filter((t) => now - t <= ONSET_KEEP_MS), t0]
+    const before = this.model
+    if (this.mode === 'paused' && before && this.fits(before, t0)) {
+      // 쉬는 동안 박자를 기억해 두었다가 맞는 젠 하나로 바로 다시 알린다(서버 젠 박자는 그대로다).
+      this.mode = 'locked'
+      this.seen(t0)
+      this.lastAlertS = this.nearest(before, t0)
+      const m = this.fit(this.onsets, now)
+      if (m) this.model = m
+      ev.push('resumed')
+      return
+    }
+    if (this.mode === 'paused') {
+      // 기억한 박자와 안 맞는 젠: 쉰 뒤의 젠만으로 새 박자가 서면 그쪽으로 바꾼다(다른 사냥터).
+      const fresh = this.onsets.filter((t) => t >= this.pausedAt)
+      const m = this.fit(fresh, now)
+      if (m) {
+        this.onsets = fresh
+        this.lockTo(m, t0, ev)
       }
-      if (this.mode === 'locked') ev.push('ignored')
+      return
     }
-    // 박자 찾는 중, 또는 기억한 박자와 안 맞는 터짐(이벤트 또는 다른 사냥터): 후보 중 주기의 정수배로 이어지는 셋을 찾는다.
-    // 마지막 셋만 보면 이벤트 터짐 하나가 끼어도 계속 실패하므로 최근 후보 전부에서 찾는다. 박자를 잡은 중이면
-    // 그 셋 사이에 기존 박자의 젠을 한 번도 못 봤을 때만 새 박자로 바꾼다(기존 박자가 살아 있으면 그쪽이 맞다).
-    this.candidates = [...this.candidates.filter((x) => t - x <= this.period * 4.5), t]
-    const locked = this.mode === 'locked'
-    const fits = (gap: number) => {
-      const k = Math.round(gap / this.period)
-      return k >= 1 && k <= 3 && Math.abs(gap - k * this.period) <= LOCK_TOL_MS ? k : 0
+    const m = this.refit(now)
+    if (!m) return
+    if (this.mode === 'search' || !before) {
+      this.lockTo(m, t0, ev)
+      return
     }
-    for (const b of this.candidates.slice(0, -1)) {
-      const k2 = fits(t - b)
-      if (!k2) continue
-      for (const a of this.candidates) {
-        if (a >= b) break
-        const k1 = fits(b - a)
-        if (k1 && !(locked && this.lastSeenT >= a)) return this.lock(a, t, k1 + k2, ev)
-      }
+    const switched = Math.abs(this.nearest(m, before.ref) - before.ref) > PHASE_TOL_MS
+    if (switched) {
+      this.lockTo(m, t0, ev)
+      return
     }
-    return !locked
+    if (this.fits(m, t0)) {
+      this.seen(t0)
+      ev.push('spawn')
+    } else ev.push('ignored')
   }
 
-  private lock(a: number, t: number, cycles: number, ev: SpawnEvent[]): boolean {
-    const base = this.opts.periodSec * 1000
+  private lockTo(m: Model, t0: number, ev: SpawnEvent[]) {
+    this.model = m
     this.mode = 'locked'
-    this.period = Math.min(base * (1 + PERIOD_ADJUST), Math.max(base * (1 - PERIOD_ADJUST), (t - a) / cycles))
-    this.anchorT = t
-    this.anchorC = 0
-    this.baseC = 0
-    this.closedC = 0
-    this.lastAlertC = 0 // 방금 본 젠은 이미 지났으므로 알리지 않는다
-    this.seen(0, t)
-    this.candidates = []
+    this.origin = this.nearest(m, t0)
+    this.lastAlertS = this.origin // 방금 본 젠은 이미 지났으므로 알리지 않는다
+    this.seen(t0)
     ev.push('locked')
-    return true
   }
 
-  private seen(c: number, t: number) {
-    this.lastSeenC = c
-    this.lastSeenT = t
+  private seen(t0: number) {
     this.quietMisses = 0
     this.blind = 0
+    if (this.model) this.lastClosedS = Math.max(this.lastClosedS, this.nearest(this.model, t0))
+  }
+
+  private nearest(m: Model, t: number) {
+    return m.ref + Math.round((t - m.ref) / m.period) * m.period
+  }
+
+  private fits(m: Model, t: number) {
+    return Math.abs(t - this.nearest(m, t)) <= PHASE_TOL_MS
+  }
+
+  private refit(now: number): Model | null {
+    const m = this.fit(this.onsets, now)
+    if (m) this.model = m
+    else if (this.mode !== 'paused') {
+      this.model = null
+      this.mode = 'search'
+    }
+    return m
+  }
+
+  /** 주기 후보마다 젠들을 접어 가장 많이(최근 젠일수록 무겁게) 모이는 위상을 고른다. 동점이면 더 꼭 맞는 쪽. */
+  private fit(onsets: number[], now: number): Model | null {
+    if (onsets.length < MIN_SUPPORT) return null
+    const w = onsets.map((t) => Math.pow(0.5, (now - t) / HALF_LIFE_MS))
+    const base = this.opts.periodSec * 1000
+    let best: { score: number; resid: number; period: number; seed: number; count: number } | null = null
+    for (let p = base * (1 - PERIOD_RANGE); p <= base * (1 + PERIOD_RANGE); p += PERIOD_STEP_MS) {
+      for (const seed of onsets) {
+        let score = 0
+        let resid = 0
+        let count = 0
+        for (let i = 0; i < onsets.length; i++) {
+          const d = onsets[i] - seed
+          const off = d - Math.round(d / p) * p
+          if (Math.abs(off) <= PHASE_TOL_MS) {
+            score += w[i]
+            resid += w[i] * off * off
+            count++
+          }
+        }
+        if (count < MIN_SUPPORT) continue
+        if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && resid < best.resid)) {
+          best = { score, resid, period: p, seed, count }
+        }
+      }
+    }
+    if (!best) return null
+    // 맞아든 젠들의 가중 평균 위치로 위상을 다듬는다.
+    let sw = 0
+    let so = 0
+    onsets.forEach((t, i) => {
+      const d = t - best!.seed
+      const off = d - Math.round(d / best!.period) * best!.period
+      if (Math.abs(off) <= PHASE_TOL_MS) {
+        sw += w[i]
+        so += w[i] * off
+      }
+    })
+    return { period: best.period, ref: best.seed + so / sw, support: best.count }
+  }
+
+  /** 젠 창(예상 시각 +0.5초)이 지나면: 봤으면 그만, 바빠서 못 봤으면 박자대로 넘김, 조용한데 없었으면 '멈춤' 쪽으로 센다. */
+  private closeWindow(now: number, m: Model, ev: SpawnEvent[]) {
+    const s = m.ref + Math.floor((now - 500 - m.ref) / m.period) * m.period
+    if (s <= this.lastClosedS + m.period / 2) return
+    this.lastClosedS = s
+    const around = this.frames.filter((f) => f.t >= s - 1500 && f.t <= s + 500)
+    const busy = around.length > 0 && around.reduce((x, f) => x + f.a, 0) / around.length >= QUIET
+    if (busy) this.blind++
+    else this.quietMisses++
+    // 젠을 너무 오래 못 보면(박자 계산에 쓸 젠이 없음) 오차가 쌓였을 수 있으니 쉰다.
+    const lastOnset = this.onsets.length ? this.onsets[this.onsets.length - 1] : -Infinity
+    if (this.quietMisses >= MAX_QUIET_MISSES || now - lastOnset > ONSET_KEEP_MS) {
+      this.mode = 'paused'
+      this.pausedAt = now
+      ev.push('lost')
+    }
   }
 }

@@ -1,157 +1,189 @@
 import { describe, expect, it } from 'vitest'
-import { SpawnTracker, type SpawnEvent } from '../spawn'
+import { SpawnTracker, type SpawnEvent, type SpawnOptions } from '../spawn'
 import recorded from './spawn-activity.json'
 
-/** 실사용 영상(밤의 길 3, 1.5분)을 4fps로 본 프레임 변화량. 젠 12번, 실측 간격 7.5초. */
+/** 실사용 영상(밤의 길 3, 1.5분)을 4fps로 본 프레임 변화량. 젠 12번, 실측 간격 7.53초. */
 const REC = recorded as { dtMs: number; activity: number[] }
+const OPTS: SpawnOptions = { periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }
 
-function run(t: SpawnTracker, acts: number[], dtMs: number) {
+function run(t: SpawnTracker, acts: number[], dtMs = 250) {
   const out: { at: number; ev: SpawnEvent }[] = []
   acts.forEach((a, i) => t.update(i === 0 ? null : a, i * dtMs).forEach((ev) => out.push({ at: i * dtMs, ev })))
   return out
 }
+const of = (out: { at: number; ev: SpawnEvent }[], ev: SpawnEvent) => out.filter((e) => e.ev === ev).map((e) => e.at)
 
-/** 조용함(5) 사이사이 periodMs마다 젠(터짐 50, 이후 3초 동안 사냥 35) */
-function synth(totalMs: number, periodMs: number, firstMs: number, extra: (t: number) => number | null = () => null) {
+interface Scene {
+  totalMs: number
+  /** 젠 시각들(ms) */
+  spawns: number[]
+  /** 젠 때 30 → 35 → 45로 오른다(실사용 관찰). 아니면 바로 50(녹화 영상) */
+  ramp?: boolean
+  /** 이벤트로 화면이 계속 30 안팎인 구간 */
+  busy?: [number, number][]
+  /** 조용하다가 젠처럼 크게 터지는 엉뚱한 시각(이벤트 몹 등) */
+  fakes?: number[]
+  /** 조용하다가 30까지만 오르는 시각(이벤트) */
+  weak?: number[]
+}
+
+/** 4fps 프레임 변화량: 평소 7, 젠 뒤 3초 사냥 35~45 */
+function scene(s: Scene): number[] {
   const acts: number[] = []
-  for (let t = 0; t < totalMs; t += 250) {
-    const since = (t - firstMs + periodMs * 100) % periodMs
-    const base = t < firstMs ? 5 : since < 250 ? 50 : since < 3000 ? 35 : 5
-    acts.push(extra(t) ?? base)
+  for (let t = 0; t < s.totalMs; t += 250) {
+    let a = 7
+    for (const x of s.spawns) {
+      const d = t - x
+      if (d > 0 && d <= 3000) a = Math.max(a, s.ramp ? [30, 35, 45][Math.ceil(d / 250) - 1] ?? 40 : d <= 250 ? 50 : 40)
+    }
+    for (const f of s.fakes ?? []) if (t - f > 0 && t - f <= 1000) a = Math.max(a, 45)
+    for (const w of s.weak ?? []) if (t - w > 0 && t - w <= 1500) a = Math.max(a, 28)
+    for (const [from, to] of s.busy ?? []) if (t >= from && t < to) a = Math.max(a, 30)
+    acts.push(a)
   }
   return acts
 }
 
+const every = (first: number, period: number, until: number) => {
+  const out: number[] = []
+  for (let t = first; t < until; t += period) out.push(Math.round(t))
+  return out
+}
+
+/** 박자를 잡은 뒤 모든 젠에 알림이 하나씩, 젠보다 lead±tol 앞서 울렸는지 */
+function expectAlerts(alerts: number[], spawns: number[], from: number, leadMs: number, tolMs: number) {
+  const due = spawns.filter((s) => s - leadMs > from + 300)
+  for (const s of due) {
+    const hit = alerts.filter((a) => Math.abs(s - leadMs - a) <= tolMs)
+    expect(hit.length, `${(s / 1000).toFixed(2)}초 젠 알림`).toBe(1)
+  }
+  // 장면 끝 직후 젠의 알림은 장면 안에 울릴 수 있으므로 마지막 젠까지만 센다
+  const last = spawns[spawns.length - 1] - leadMs + tolMs
+  expect(alerts.filter((a) => a > from && a <= last).length).toBe(due.length)
+}
+
 describe('SpawnTracker — 실사용 영상', () => {
   it('젠 3번으로 박자를 잡고, 이후 젠마다 0.5초 전에 알린다(오알림·놓침 없음)', () => {
-    const t = new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 })
+    const t = new SpawnTracker(OPTS)
     const out = run(t, REC.activity, REC.dtMs)
-    const spawns = out.filter((e) => e.ev === 'spawn' || e.ev === 'locked').map((e) => e.at / 1000)
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at / 1000)
-    expect(out.filter((e) => e.ev === 'ignored' || e.ev === 'lost')).toEqual([])
-    expect(out.find((e) => e.ev === 'locked')!.at).toBe(19250) // 4.25, 11.75, 19.25초 젠으로 박자 잡음
-    expect(spawns).toHaveLength(10) // 박자 잡은 젠 + 이후 9번
-    // 박자 잡은 뒤 젠마다 알림 하나, 실제 젠보다 0.25~1초 앞
+    expect(of(out, 'ignored')).toEqual([])
+    expect(of(out, 'lost')).toEqual([])
+    expect(of(out, 'locked')).toEqual([19250]) // 4.25, 11.75, 19.25초 젠으로 박자 잡음
+    expect(of(out, 'spawn')).toHaveLength(9)
+    const spawns = [26.75, 34.25, 41.75, 49.25, 56.75, 64.5, 71.75, 79.5, 86.75].map((s) => s * 1000)
+    const alerts = of(out, 'alert')
     expect(alerts).toHaveLength(9)
-    for (const s of spawns.slice(1)) expect(alerts.some((a) => s - a >= 0.0 && s - a <= 1.0), `${s}초 젠 알림`).toBe(true)
-  })
-
-  it('알림 시점 1초면 1초쯤 앞서, 2번마다면 절반만 알린다', () => {
-    const one = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 1, everyN: 1 }), REC.activity, REC.dtMs)
-    const two = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 1, everyN: 2 }), REC.activity, REC.dtMs)
-    const spawns = one.filter((e) => e.ev === 'spawn').map((e) => e.at)
-    const alerts = one.filter((e) => e.ev === 'alert').map((e) => e.at)
-    for (const s of spawns) expect(alerts.some((a) => s - a >= 500 && s - a <= 1500)).toBe(true)
-    expect(two.filter((e) => e.ev === 'alert').length).toBe(Math.floor(alerts.length / 2)) // 박자 잡은 젠부터 세어 2, 4, 6…번째
-  })
-
-  it('설정 주기가 조금 달라도(7.2초) 실측에 맞춰 잡는다', () => {
-    const t = new SpawnTracker({ periodSec: 7.2, alertBeforeSec: 0.5, everyN: 1 })
-    const out = run(t, REC.activity, REC.dtMs)
-    expect(out.filter((e) => e.ev === 'lost')).toEqual([])
-    expect(out.filter((e) => e.ev === 'spawn').length).toBeGreaterThanOrEqual(8)
-    expect(t.status(REC.activity.length * REC.dtMs).periodSec).toBeCloseTo(7.5, 1)
-  })
-})
-
-describe('SpawnTracker — 변수', () => {
-  it('박자와 안 맞는 터짐(이벤트 몬스터·이벤트 스킬)은 무시한다', () => {
-    // 25초 이후 조용한 틈마다 엉뚱한 시각(젠 5초 뒤)에 터짐, 그중 두 번은 젠 1.25초 전에 터짐
-    const acts = synth(80000, 7500, 2000, (t) => {
-      const since = (t - 2000) % 7500
-      if (t > 25000 && since === 5000) return 60
-      if ((t > 45000 && t < 46000) || (t > 53000 && t < 54000)) return since === 6250 ? 60 : null
-      return null
+    // 젠을 본 프레임(실제 젠은 그 앞 0~0.25초)보다 0.25~1.25초 앞
+    spawns.forEach((s, i) => {
+      expect(s - alerts[i]).toBeGreaterThanOrEqual(250)
+      expect(s - alerts[i]).toBeLessThanOrEqual(1250)
     })
-    const out = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }), acts, 250)
-    expect(out.some((e) => e.ev === 'ignored')).toBe(true)
-    expect(out.filter((e) => e.ev === 'lost')).toEqual([])
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
-    // 알림은 모두 젠 0.5초 전(= 젠 시각 7000ms 위상)
-    for (const a of alerts) expect((a + 500 - 2000) % 7500).toBe(0)
+    expect(t.status(90000).periodSec).toBeCloseTo(7.53, 1)
   })
 
-  it('화면이 바빠 젠을 못 봐도 박자대로 계속 알리고, 조용한데 3번 연속 없으면 쉰다', () => {
-    // 25~40초 젠 2번은 화면이 계속 시끄러워 안 보임, 50초부터는 사냥 끝(계속 조용)
-    const acts = synth(80000, 7500, 2000, (t) => (t >= 50000 ? 5 : t >= 25000 && t < 40000 ? 35 : null))
-    const out = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }), acts, 250)
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
-    expect(alerts).toContain(31500) // 32초 젠은 못 봤지만 알림
-    const lost = out.find((e) => e.ev === 'lost')!
-    expect(lost.at).toBeGreaterThanOrEqual(69000) // 50초부터 조용: 54.5, 62, 69.5초 젠이 없음
-    expect(alerts.every((a) => a < lost.at)).toBe(true)
+  it('알림 간격 2면 박자 잡은 젠부터 세어 두 번째마다 알린다', () => {
+    const one = of(run(new SpawnTracker(OPTS), REC.activity), 'alert')
+    const two = of(run(new SpawnTracker({ ...OPTS, everyN: 2 }), REC.activity), 'alert')
+    expect(two).toEqual(one.filter((_, i) => i % 2 === 1))
   })
 
-  it('조용하지 않은 채로 계속 바쁜 화면에서는 박자를 잡지 않는다', () => {
-    const acts = Array.from({ length: 400 }, (_, i) => 30 + ((i * 37) % 25))
-    const out = run(new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }), acts, 250)
-    expect(out).toEqual([])
+  it('설정 주기를 7.2초로 짐작해도 실제 7.53초를 찾는다', () => {
+    const t = new SpawnTracker({ ...OPTS, periodSec: 7.2 })
+    const out = run(t, REC.activity)
+    expect(of(out, 'lost')).toEqual([])
+    expect(of(out, 'alert')).toHaveLength(9)
+    expect(t.status(90000).periodSec).toBeCloseTo(7.53, 1)
   })
 })
 
-describe('SpawnTracker.nextAlertAt', () => {
-  it('다음 알림 시각을 미리 알려 주고, 그 시각에 update하면 정확히 그때 알린다', () => {
-    const t = new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.7, everyN: 1 })
-    const acts = REC.activity
-    let i = 0
-    for (; i < acts.length; i++) if (t.update(i === 0 ? null : acts[i], i * REC.dtMs).includes('locked')) break
-    const due = t.nextAlertAt()!
-    // 박자 잡은 젠(직전 프레임과의 가운데) + 주기 − 0.7초
-    expect(due - (i - 0.5) * REC.dtMs).toBeGreaterThan(7500 * 0.9 - 700)
-    expect(due - (i - 0.5) * REC.dtMs).toBeLessThan(7500 * 1.1 - 700)
-    expect(t.update(null, due - 1)).toEqual([])
-    expect(t.update(null, due)).toEqual(['alert'])
-    expect(t.nextAlertAt()).toBeCloseTo(due + 7500, -1)
+describe('SpawnTracker — 젠 판정', () => {
+  it('30 → 35 → 45로 천천히 올라도 오르기 시작한 때를 젠으로 본다', () => {
+    const spawns = every(2000, 7530, 60000)
+    const t = new SpawnTracker(OPTS)
+    const out = run(t, scene({ totalMs: 60000, spawns, ramp: true }))
+    expect(of(out, 'locked')).toHaveLength(1)
+    expectAlerts(of(out, 'alert'), spawns, of(out, 'locked')[0], 500, 300)
+  })
+
+  it('30 안팎까지만 오르는 변화(이벤트)는 젠이 아니다', () => {
+    const out = run(new SpawnTracker(OPTS), scene({ totalMs: 60000, spawns: [], weak: every(3000, 7530, 60000) }))
+    expect(of(out, 'weak').length).toBeGreaterThan(5)
+    expect(of(out, 'locked')).toEqual([])
   })
 })
 
-describe('SpawnTracker — 이벤트 뒤 회복(실사용: 이벤트 때마다 박자를 버려 절반가량 놓침)', () => {
-  const opts = { periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 }
-  /** 젠 시각 위상(ms): 2000 + 7500k 에서 alertBefore 0.5초 */
-  const onBeat = (a: number) => (a + 500 - 2000) % 7500 === 0
-
-  it('이벤트로 1분 넘게 화면이 계속 바빠도 박자를 버리지 않고 알림을 이어 간다', () => {
-    // 20~95초: 이벤트 몹이 3초마다 나와 화면이 계속 바쁨(조용한 틈 없음, 3초마다 큰 터짐)
-    const acts = synth(130000, 7500, 2000, (t) => (t >= 20000 && t < 95000 ? (t % 3000 === 0 ? 60 : 35) : null))
-    const out = run(new SpawnTracker(opts), acts, 250)
-    expect(out.filter((e) => e.ev === 'lost')).toEqual([])
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
-    expect(alerts.every(onBeat)).toBe(true)
-    // 박자 잡은 17초 젠 뒤로 끝까지 모든 젠에 알림
-    const expected = Array.from({ length: 15 }, (_, k) => 2000 + 7500 * (k + 3) - 500).filter((a) => a < 130000)
-    expect(alerts).toEqual(expected)
-    // 이벤트가 끝나면 다시 젠을 본다
-    expect(out.some((e) => e.ev === 'spawn' && e.at > 95000)).toBe(true)
+describe('SpawnTracker — 이벤트가 이어져도 밀리지 않는다(실사용: 한 번 밀리면 이벤트가 없어도 계속 밀림)', () => {
+  it('실제 7.53초, 4분 동안 긴 이벤트 두 번 + 엉뚱한 터짐 여럿이 섞여도 모든 젠에 제때 알린다', () => {
+    const spawns = every(2000, 7530, 240000)
+    // 엉뚱한 터짐: 조용한 틈(젠 4~7초 뒤)에 무작위 위상으로
+    const fakes = [26000, 47500, 63200, 91000, 118700, 152300, 171900, 205600, 226800].map((f) => {
+      const k = Math.floor((f - 2000) / 7530)
+      return 2000 + k * 7530 + 4000 + ((f * 7) % 2500)
+    })
+    const s: Scene = { totalMs: 240000, spawns, ramp: true, busy: [[60000, 105000], [150000, 175000]], fakes }
+    const out = run(new SpawnTracker(OPTS), scene(s))
+    expect(of(out, 'lost')).toEqual([])
+    const locked = of(out, 'locked')
+    expect(locked).toHaveLength(1)
+    expectAlerts(of(out, 'alert'), spawns, locked[0], 500, 300)
   })
 
+  it('잘못된 박자를 먼저 잡아도(엉뚱한 터짐 셋) 진짜 젠이 쌓이면 진짜 박자로 바꾼다', () => {
+    const spawns = every(30000, 7530, 150000)
+    const fakes = [2000, 9530, 17060] // 젠 박자와 3초 어긋난 같은 간격
+    const out = run(new SpawnTracker(OPTS), scene({ totalMs: 150000, spawns, fakes }))
+    const locked = of(out, 'locked')
+    expect(locked.length).toBe(2)
+    expectAlerts(of(out, 'alert'), spawns, locked[1] + 7530, 500, 300)
+  })
+})
+
+describe('SpawnTracker — 쉬기·이동', () => {
   it('쉬었다가(마을 등) 같은 사냥터로 돌아오면 젠 하나로 바로 다시 알린다', () => {
-    // 40~80초 조용(사냥 안 함) → 80초부터 다시 사냥(서버 젠 박자는 그대로)
-    const acts = synth(120000, 7500, 2000, (t) => (t >= 40000 && t < 80000 ? 5 : null))
-    const out = run(new SpawnTracker(opts), acts, 250)
-    const lost = out.find((e) => e.ev === 'lost')!
-    const resumed = out.find((e) => e.ev === 'resumed')!
-    expect(lost.at).toBeGreaterThan(40000)
-    expect(resumed.at).toBe(84500) // 80초 뒤 첫 젠(84.5초)
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at)
-    expect(alerts.filter((a) => a > lost.at && a < resumed.at)).toEqual([])
-    expect(alerts.filter((a) => a > resumed.at)).toEqual([91500, 99000, 106500, 114000])
-  })
-
-  it('박자를 찾는 중 젠 사이에 이벤트 터짐이 끼어도 잡는다', () => {
-    // 처음부터 젠 사이(젠 5초 뒤)마다 이벤트 터짐
-    const acts = synth(40000, 7500, 2000, (t) => ((t - 2000) % 7500 === 5000 ? 60 : null))
-    const out = run(new SpawnTracker(opts), acts, 250)
-    expect(out.find((e) => e.ev === 'locked')!.at).toBe(17000)
+    const all = every(2000, 7530, 130000)
+    const spawns = all.filter((s) => s < 40000 || s > 80000)
+    const out = run(new SpawnTracker(OPTS), scene({ totalMs: 130000, spawns }))
+    const lost = of(out, 'lost')[0]
+    const resumed = of(out, 'resumed')[0]
+    expect(lost).toBeGreaterThan(40000)
+    expect(resumed).toBeLessThan(spawns.find((s) => s > 80000)! + 500)
+    const alerts = of(out, 'alert')
+    expect(alerts.filter((a) => a > lost && a < resumed)).toEqual([])
+    expectAlerts(alerts, spawns, resumed, 500, 300)
   })
 
   it('다른 사냥터(다른 박자)로 옮기면 새 박자를 잡는다', () => {
-    const first = synth(40000, 7500, 2000)
-    // 40~55초 이동(조용), 55초부터 위상이 3초 다른 박자
-    const second = synth(60000, 7500, 18000).map((a, i) => (i * 250 < 15000 ? 5 : a))
-    const out = run(new SpawnTracker(opts), [...first, ...second], 250)
-    const locks = out.filter((e) => e.ev === 'locked').map((e) => e.at)
-    expect(locks).toHaveLength(2)
-    const alerts = out.filter((e) => e.ev === 'alert').map((e) => e.at).filter((a) => a > locks[1])
-    for (const a of alerts) expect((a + 500 - 40000 - 18000) % 7500).toBe(0)
+    const first = every(2000, 7530, 40000)
+    const second = every(58000, 7530, 130000) // 위상이 다른 박자
+    const out = run(new SpawnTracker(OPTS), scene({ totalMs: 130000, spawns: [...first, ...second] }))
+    const locked = of(out, 'locked')
+    expect(locked).toHaveLength(2)
+    expectAlerts(of(out, 'alert'), second, locked[1], 500, 300)
+  })
+
+  it('계속 바쁘기만 한 화면에서는 박자를 잡지 않는다', () => {
+    const out = run(new SpawnTracker(OPTS), Array.from({ length: 400 }, (_, i) => 30 + ((i * 37) % 25)))
+    expect(of(out, 'locked')).toEqual([])
+    expect(of(out, 'alert')).toEqual([])
+  })
+})
+
+describe('SpawnTracker.nextAlertAt / 기록', () => {
+  it('다음 알림 시각을 미리 알려 주고, 그 시각에 update하면 정확히 그때 알린다', () => {
+    const t = new SpawnTracker({ ...OPTS, alertBeforeSec: 0.7 })
+    let i = 0
+    for (; i < REC.activity.length; i++) if (t.update(i === 0 ? null : REC.activity[i], i * REC.dtMs).includes('locked')) break
+    const due = t.nextAlertAt()!
+    expect(t.update(null, due - 1)).toEqual([])
+    expect(t.update(null, due)).toEqual(['alert'])
+    expect(t.nextAlertAt()! - due).toBeCloseTo(t.status(due).periodSec * 1000, 0)
+  })
+
+  it('프레임마다 변화량과 판정을 남긴다', () => {
+    const t = new SpawnTracker(OPTS)
+    run(t, REC.activity)
+    const log = t.getLog()
+    expect(log).toHaveLength(REC.activity.length)
+    expect(log.filter((r) => r.events.includes('alert'))).toHaveLength(9)
   })
 })
