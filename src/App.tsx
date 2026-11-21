@@ -17,7 +17,7 @@ import { emptyBank, findRule, learn, learnedChars, segment, type DigitBank } fro
 import { TextRuleControl } from './components/TextRuleControl'
 import { cropRgba, type Rect, type Rgba } from './core/image'
 import type { TargetSpec } from './detector'
-import { CombatRow, HuntRow, RuneRow, TimedRow } from './components/Rows'
+import { CombatRow, HuntRow, RuneRow, SpawnRow, TimedRow } from './components/Rows'
 import { TemplateEditor, type EditorResult } from './components/TemplateEditor'
 
 type EditorTarget = { id: string; title: string; withDigits: boolean; maskOnly?: boolean; snapshot: HTMLCanvasElement }
@@ -51,7 +51,7 @@ export default function App() {
     (captureRef.current ??= new Capture({
       onMessage: (m) => {
         if (m.type === 'size') setFrame({ w: m.width, h: m.height })
-        else if (m.type === 'result') engine.handle(m.detections, m.ms, m.at, m.exp)
+        else if (m.type === 'result') engine.handle(m.detections, m.ms, m.at, m.exp, m.spawn)
         else if (m.type === 'error') setError(m.message)
       },
       onEnded: () => {
@@ -91,6 +91,7 @@ export default function App() {
       fps: settings.fps,
       bank,
       expRegion: settings.huntStop.enabled ? settings.huntStop.region : null,
+      spawnRegion: settings.spawn.enabled ? settings.spawn.region : null,
     })
   }, [settings, profile, bank])
 
@@ -103,6 +104,7 @@ export default function App() {
       runeRatio: number
       runeCheckSec: number
       expRegion: Rect | null
+      spawnRegion: Rect | null
       regions: Regions
       th: number
       fps: number
@@ -160,7 +162,7 @@ export default function App() {
       captureRef.current?.send({
         type: 'config',
         fps: cfg.fps,
-        config: { digitBank: cfg.bank, targets, expRegion: cfg.expRegion },
+        config: { digitBank: cfg.bank, targets, expRegion: cfg.expRegion, spawnRegion: cfg.spawnRegion },
       })
       captureRef.current?.setFps(cfg.fps)
     })()
@@ -371,6 +373,19 @@ export default function App() {
           status={snap?.hunt ?? null}
           active={active}
           onChange={(huntStop) => update((s) => ({ ...s, huntStop }))}
+        />
+      </section>
+
+      <section className="card">
+        <div className="card-head">
+          <h2>젠 알림</h2>
+          <span className="muted small">화면이 조용하다가 몬스터가 나와 한꺼번에 바뀌는 순간으로 젠 박자를 맞춰, 젠 직전에 알립니다</span>
+        </div>
+        <SpawnRow
+          spawn={settings.spawn}
+          status={snap?.spawn ?? null}
+          active={active}
+          onChange={(spawn) => update((s) => ({ ...s, spawn }))}
         />
       </section>
 

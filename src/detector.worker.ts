@@ -19,6 +19,8 @@ export type WorkerOut =
       ms: number
       detections: Detection[]
       exp: ExpChange | null
+      /** 사냥 화면 변화량(젠 감지) */
+      spawn: number | null
     }
   | { type: 'size'; width: number; height: number }
   | { type: 'error'; message: string }
@@ -55,12 +57,15 @@ function process(src: VideoFrame | ImageBitmap, w: number, h: number) {
   }
   if (!configured) return
   const t0 = performance.now()
+  // 처리 전에 시각을 잡는다(처리 시간만큼 늦게 찍히면 젠 박자가 그만큼 밀린다).
+  const at = Date.now()
   const frame = grab(src, w, h)
   const detections = detector.detect(frame, t0)
   const exp = detector.watchExp(frame)
+  const spawn = detector.watchSpawn(frame)
   const transfer = detections.flatMap((d) => (d.digitCrop ? [d.digitCrop.data.buffer] : []))
   post(
-    { type: 'result', at: Date.now(), width: w, height: h, ms: performance.now() - t0, detections, exp },
+    { type: 'result', at, width: w, height: h, ms: performance.now() - t0, detections, exp, spawn },
     transfer as Transferable[],
   )
 }

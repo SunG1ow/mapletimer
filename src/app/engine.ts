@@ -5,6 +5,7 @@ import { MAX_GLYPH_DISTANCE } from '../core/digits'
 import type { Rgba } from '../core/image'
 import { parseRemaining } from '../core/time'
 import type { ExpChange } from '../core/expwatch'
+import { SpawnTracker, type SpawnStatus } from '../core/spawn'
 import { CombatTracker, HuntStopTracker, PresenceTracker, TimedTracker, type TimedOptions } from '../core/trackers'
 import type { Detection } from '../detector'
 import { fireAlert } from './sound'
@@ -47,6 +48,7 @@ export interface EngineSnapshot {
   targets: Record<string, TargetStatus>
   hunt: HuntStatus | null
   combat: CombatStatus | null
+  spawn: (SpawnStatus & { activity: number | null }) | null
 }
 
 export const RUNE_ID = 'rune'
@@ -88,11 +90,13 @@ export class Engine {
   private timed = new Map<string, TimedTracker>()
   private rune: PresenceTracker
   private lastEvents = new Map<string, { ev: string; at: number }>()
-  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null, combat: null }
+  snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null, combat: null, spawn: null }
   private hunt = new HuntStopTracker({ stopSec: 60, repeatSec: 15 })
+  private spawn = new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 })
   private combat = new CombatTracker({ keepSec: 14, buffSec: 5, alertBeforeSec: 3 })
   private pending: { suffix: string; names: string[]; pattern?: number[] }[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null
+  private spawnTimer: ReturnType<typeof setTimeout> | null = null
   private onChange: (s: EngineSnapshot) => void = () => {}
   private onLog: (line: string) => void = () => {}
 
@@ -122,6 +126,9 @@ export class Engine {
     const c = s.combat
     this.combat.setOptions({ keepSec: c.keepSec, buffSec: c.buffSec, alertBeforeSec: c.alertBeforeSec })
     if (!c.enabled) this.combat.reset()
+    const sp = s.spawn
+    this.spawn.setOptions({ periodSec: sp.periodSec, alertBeforeSec: sp.alertBeforeSec, everyN: sp.everyN })
+    if (!sp.enabled) this.spawn.reset()
   }
 
   reset() {
@@ -129,6 +136,9 @@ export class Engine {
     this.rune.reset()
     this.hunt.reset()
     this.combat.reset()
+    this.spawn.reset()
+    if (this.spawnTimer) clearTimeout(this.spawnTimer)
+    this.spawnTimer = null
   }
 
   private alert(text: string, pattern?: number[]) {
@@ -136,6 +146,26 @@ export class Engine {
     const s = this.settings
     if (s.allMuted) return
     fireAlert(text, { volume: s.volume, speech: s.speechEnabled, desktop: s.notifyEnabled }, pattern)
+  }
+
+  /** 다음 프레임보다 먼저 올 젠 알림은 타이머로 제 시각에 울린다. */
+  private scheduleSpawnAlert(now: number) {
+    if (this.spawnTimer) clearTimeout(this.spawnTimer)
+    this.spawnTimer = null
+    const due = this.spawn.nextAlertAt()
+    if (due === null || due - now > 600) return
+    this.spawnTimer = setTimeout(() => {
+      this.spawnTimer = null
+      if (!this.settings.spawn.enabled) return
+      for (const ev of this.spawn.update(null, Date.now())) if (ev === 'alert') this.spawnAlert(this.settings.spawn.speech)
+    }, Math.max(0, due - now) + 5)
+  }
+
+  /** 젠 알림: 짧은 소리. 음성 문구를 적었을 때만 읽는다(윈도우 알림은 너무 잦아 보내지 않는다). */
+  private spawnAlert(speech: string) {
+    const s = this.settings
+    if (s.allMuted) return
+    fireAlert(speech || '젠', { volume: s.volume, speech: s.speechEnabled && !!speech, desktop: false }, [1320])
   }
 
   /** 버프 알림은 잠깐 모았다가 같은 내용끼리 한 번에 알린다. */
@@ -163,7 +193,7 @@ export class Engine {
     return e && now - e.at <= EVENT_SHOW_MS ? e.ev : null
   }
 
-  handle(detections: Detection[], frameMs: number, now = Date.now(), exp: ExpChange | null = null) {
+  handle(detections: Detection[], frameMs: number, now = Date.now(), exp: ExpChange | null = null, spawnActivity: number | null = null) {
     // 룬처럼 몇 초 간격으로만 검사하는 대상은 이번 프레임에 결과가 없으니 직전 상태를 유지한다.
     const targets: Record<string, TargetStatus> = { ...this.snapshot.targets }
     let combat = this.snapshot.combat
@@ -221,7 +251,19 @@ export class Engine {
       hunt = { idleSec: this.hunt.idleSec(now), stopped: this.hunt.stopped, diffPx: exp.diffPx }
     }
     if (!this.settings.combat.enabled) combat = null
-    this.snapshot = { at: now, frameMs, targets, hunt, combat }
+    let spawn: EngineSnapshot['spawn'] = null
+    const sp = this.settings.spawn
+    if (sp.enabled) {
+      for (const ev of this.spawn.update(spawnActivity, now)) {
+        // 7.5초마다 울리므로 기록에는 남기지 않고, 박자를 잡거나 놓칠 때만 남긴다.
+        if (ev === 'alert') this.spawnAlert(sp.speech)
+        else if (ev === 'locked') this.onLog(`젠 박자 잡음 (${this.spawn.status(now).periodSec.toFixed(2)}초)`)
+        else if (ev === 'lost') this.onLog('젠 박자 놓침 — 다시 찾는 중')
+      }
+      spawn = { ...this.spawn.status(now), activity: spawnActivity }
+      this.scheduleSpawnAlert(now)
+    }
+    this.snapshot = { at: now, frameMs, targets, hunt, combat, spawn }
     this.onChange(this.snapshot)
   }
 }

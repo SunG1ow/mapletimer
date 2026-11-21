@@ -4,6 +4,7 @@ import { read, type DigitBank } from './core/digits'
 import { cropRgba, fracToRect, type Rect, type Rgba } from './core/image'
 import { ExpWatcher, type ExpChange } from './core/expwatch'
 import { findMinimap, hasSelfDot } from './core/minimap'
+import { ActivityWatcher } from './core/spawn'
 import {
   findShape,
   findTemplate,
@@ -68,6 +69,8 @@ export interface DetectorConfig {
   targets: TargetSpec[]
   /** 사냥 멈춤 감지용 경험치 띠(화면 비율). 없으면 감시하지 않는다 */
   expRegion?: Rect | null
+  /** 젠 박자 알림용 사냥 화면 영역(화면 비율). 없으면 재지 않는다 */
+  spawnRegion?: Rect | null
 }
 
 export interface Detection {
@@ -108,12 +111,17 @@ export class Detector {
 
   private expRegion: Rect | null = null
   private exp = new ExpWatcher()
+  private spawnRegion: Rect | null = null
+  private activity = new ActivityWatcher()
 
   configure(cfg: DetectorConfig) {
     this.bank = cfg.digitBank
     const er = cfg.expRegion ?? null
     if (JSON.stringify(er) !== JSON.stringify(this.expRegion)) this.exp.reset()
     this.expRegion = er
+    const sr = cfg.spawnRegion ?? null
+    if (JSON.stringify(sr) !== JSON.stringify(this.spawnRegion)) this.activity.reset()
+    this.spawnRegion = sr
     this.targets = cfg.targets.map((t) => ({
       ...t,
       prepared: t.variants.map((v) =>
@@ -132,6 +140,12 @@ export class Detector {
   watchExp(frame: Rgba): ExpChange | null {
     if (!this.expRegion) return null
     return this.exp.update(cropRgba(frame, fracToRect(this.expRegion, frame.width, frame.height)))
+  }
+
+  /** 사냥 화면이 직전 프레임에서 얼마나 바뀌었는지(젠 감지). 영역이 없거나 첫 프레임이면 null. */
+  watchSpawn(frame: Rgba): number | null {
+    if (!this.spawnRegion) return null
+    return this.activity.update(cropRgba(frame, fracToRect(this.spawnRegion, frame.width, frame.height)))
   }
 
   /** 이번 프레임에 검사한 대상의 결과만 돌려준다(간격이 남은 대상은 빠진다). */

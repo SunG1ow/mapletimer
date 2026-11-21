@@ -6,10 +6,11 @@ import {
   type CombatAlert,
   type HuntStopAlert,
   type RuneAlert,
+  type SpawnAlert,
   type TemplateData,
   type TimedAlert,
 } from '../config'
-import type { CombatStatus, HuntStatus, TargetStatus } from '../app/engine'
+import type { CombatStatus, EngineSnapshot, HuntStatus, TargetStatus } from '../app/engine'
 import { formatSec } from '../core/time'
 
 function Toggle(p: { on: boolean; onChange: (v: boolean) => void }) {
@@ -61,6 +62,7 @@ function NumberField(p: {
   suffix: string
   min?: number
   max?: number
+  step?: number
   width?: number
 }) {
   const min = p.min ?? 0
@@ -71,6 +73,7 @@ function NumberField(p: {
         type="number"
         min={min}
         max={Number.isFinite(max) ? max : undefined}
+        step={p.step}
         value={p.value}
         style={{ width: p.width ?? 56 }}
         onChange={(e) => p.onChange(Math.min(max, Math.max(min, Number(e.target.value) || 0)))}
@@ -334,6 +337,69 @@ export function CombatRow(p: {
       <div className="cell">
         <label>음성</label>
         <input className="speech" value={c.speech} onChange={(e) => set({ speech: e.target.value })} />
+      </div>
+    </div>
+  )
+}
+
+export function SpawnRow(p: {
+  spawn: SpawnAlert
+  status: EngineSnapshot['spawn']
+  active: boolean
+  onChange: (s: SpawnAlert) => void
+}) {
+  const sp = p.spawn
+  const st = p.status
+  const set = (patch: Partial<SpawnAlert>) => p.onChange({ ...sp, ...patch })
+  return (
+    <div className={`row ${sp.enabled ? '' : 'off'}`}>
+      <Toggle on={sp.enabled} onChange={(enabled) => set({ enabled })} />
+      <div className="thumb exp-thumb" title="사냥 화면이 조용하다가 한꺼번에 바뀌는 순간을 젠으로 봅니다">
+        <span>젠</span>
+      </div>
+      <div className="row-main">
+        <strong>젠 박자</strong>
+        <div className="row-sub">
+          {!p.active || !sp.enabled ? (
+            <span className="muted">대기</span>
+          ) : !st ? (
+            <span className="muted">…</span>
+          ) : st.locked ? (
+            <span className="ok">박자 맞춤 {st.periodSec.toFixed(2)}초</span>
+          ) : (
+            <span className="muted">박자 찾는 중 (젠 3번 필요)</span>
+          )}
+          {st?.locked && st.misses > 0 && <span className="muted">놓침 {st.misses}번</span>}
+          {st?.activity != null && <span className="muted">변화 {st.activity.toFixed(0)}</span>}
+        </div>
+      </div>
+      <div className="cell">
+        <label>다음 젠</label>
+        <strong>{st?.nextInSec != null ? `${st.nextInSec.toFixed(1)}초` : '--'}</strong>
+      </div>
+      <div className="cell">
+        <label>젠 주기</label>
+        <NumberField value={sp.periodSec} min={3} max={30} step={0.1} onChange={(periodSec) => set({ periodSec })} suffix="초" width={56} />
+      </div>
+      <div className="cell">
+        <label>알림 시점</label>
+        <NumberField
+          value={sp.alertBeforeSec}
+          min={0}
+          max={3}
+          step={0.1}
+          onChange={(alertBeforeSec) => set({ alertBeforeSec: Math.round(alertBeforeSec * 10) / 10 })}
+          suffix="초 전"
+          width={52}
+        />
+      </div>
+      <div className="cell">
+        <label>알림 간격</label>
+        <NumberField value={sp.everyN} min={1} max={10} onChange={(everyN) => set({ everyN: Math.round(everyN) })} suffix="번째 젠마다" width={40} />
+      </div>
+      <div className="cell">
+        <label>음성 (비우면 소리만)</label>
+        <input className="speech" value={sp.speech} onChange={(e) => set({ speech: e.target.value })} />
       </div>
     </div>
   )
