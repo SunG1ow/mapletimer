@@ -1,6 +1,6 @@
 // 워커 감지 결과 → 추적기 → 알림. React 바깥에서 동작해 탭이 가려져도 알림이 늦지 않는다.
 
-import type { Settings, TimedAlert } from '../config'
+import { DEFAULT_SPAWN_PERIOD_SEC, type Settings, type TimedAlert } from '../config'
 import { MAX_GLYPH_DISTANCE } from '../core/digits'
 import type { Rgba } from '../core/image'
 import { parseRemaining } from '../core/time'
@@ -92,7 +92,7 @@ export class Engine {
   private lastEvents = new Map<string, { ev: string; at: number }>()
   snapshot: EngineSnapshot = { at: 0, frameMs: 0, targets: {}, hunt: null, combat: null, spawn: null }
   private hunt = new HuntStopTracker({ stopSec: 60, repeatSec: 15 })
-  private spawn = new SpawnTracker({ periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1 })
+  private spawn = new SpawnTracker({ periodSec: DEFAULT_SPAWN_PERIOD_SEC, alertBeforeSec: 0.5, everyN: 1 })
   private combat = new CombatTracker({ keepSec: 14, buffSec: 5, alertBeforeSec: 3 })
   private pending: { suffix: string; names: string[]; pattern?: number[] }[] = []
   private flushTimer: ReturnType<typeof setTimeout> | null = null

@@ -82,7 +82,7 @@ export interface CombatAlert {
 /** 젠 박자 알림: 사냥 화면이 조용하다가 한꺼번에 바뀌는 순간(젠)으로 박자를 맞추고 젠 직전에 알림 */
 export interface SpawnAlert {
   enabled: boolean
-  /** 젠 주기(초). 실측 7.5초(밤의 길 3). 처음 박자를 잡는 기준이고 이후 실측으로 ±10% 안에서 맞춘다 */
+  /** 젠 주기(초). 박자를 찾는 범위(±6%)의 가운데이자, 본 젠이 적을 때 믿는 값. 이후 실측으로 맞춘다 */
   periodSec: number
   /** 젠 이 시간(초) 전에 알림 */
   alertBeforeSec: number
@@ -93,6 +93,9 @@ export interface SpawnAlert {
   /** 변화량을 재는 사냥 화면 영역(화면 비율). 미니맵·아래쪽 UI 제외 */
   region: Rect
 }
+
+/** 밤의 길 3 실측: 영상 1.5분 7.524초(젠 12번), 실사용 27분 7.578초(젠 78번) → 젠 수 가중 평균 */
+export const DEFAULT_SPAWN_PERIOD_SEC = 7.57
 
 export const DEFAULT_SPAWN_REGION: Rect = { x: 0.16, y: 0.08, w: 0.8, h: 0.8 }
 
@@ -161,7 +164,7 @@ export function defaultSettings(): Settings {
     rune: { enabled: true, templates: {}, repeatSec: 30, checkSec: 1, matchRatio: 0.65, speech: '룬' },
     huntStop: { enabled: true, stopSec: 60, repeatSec: 15, speech: '사냥 멈춤', region: DEFAULT_HUNT_REGION },
     combat: { enabled: true, templates: {}, keepSec: 14, buffSec: 5, alertBeforeSec: 3, speech: '공격' },
-    spawn: { enabled: true, periodSec: 7.5, alertBeforeSec: 0.5, everyN: 1, speech: '', region: DEFAULT_SPAWN_REGION },
+    spawn: { enabled: true, periodSec: DEFAULT_SPAWN_PERIOD_SEC, alertBeforeSec: 0.5, everyN: 1, speech: '', region: DEFAULT_SPAWN_REGION },
     profiles: {},
   }
 }

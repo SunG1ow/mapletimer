@@ -50,11 +50,14 @@ const every = (first: number, period: number, until: number) => {
   return out
 }
 
-/** 박자를 잡은 뒤 모든 젠에 알림이 하나씩, 젠보다 lead±tol 앞서 울렸는지 */
+/**
+ * 박자를 잡은 뒤 모든 젠에 알림이 하나씩, 젠보다 lead±tol 앞서 울렸는지.
+ * 여기서는 프레임(0.25초)마다만 update하므로 알림이 다음 프레임까지 늦을 수 있다(앱은 타이머로 제 시각에 울린다).
+ */
 function expectAlerts(alerts: number[], spawns: number[], from: number, leadMs: number, tolMs: number) {
   const due = spawns.filter((s) => s - leadMs > from + 300)
   for (const s of due) {
-    const hit = alerts.filter((a) => Math.abs(s - leadMs - a) <= tolMs)
+    const hit = alerts.filter((a) => a - (s - leadMs) >= -tolMs && a - (s - leadMs) <= tolMs + 250)
     expect(hit.length, `${(s / 1000).toFixed(2)}초 젠 알림`).toBe(1)
   }
   // 장면 끝 직후 젠의 알림은 장면 안에 울릴 수 있으므로 마지막 젠까지만 센다
@@ -185,5 +188,38 @@ describe('SpawnTracker.nextAlertAt / 기록', () => {
     const log = t.getLog()
     expect(log).toHaveLength(REC.activity.length)
     expect(log.filter((r) => r.events.includes('alert'))).toHaveLength(9)
+  })
+})
+
+describe('SpawnTracker — 기본 주기(실측 7.57초)', () => {
+  const opts: SpawnOptions = { periodSec: 7.57, alertBeforeSec: 0.5, everyN: 1 }
+
+  it('젠 3번이 흔들려 주기를 틀리게 잡을 수 있어도, 곧이은 이벤트 동안 밀리지 않는다', () => {
+    // 실제 7.57초. 처음 젠 3번 중 마지막이 0.2초 늦게 보이면 젠 3개만으로는 7.67초로도 맞아든다.
+    const spawns = every(2000, 7570, 90000)
+    const seen = spawns.map((s, i) => (i === 2 ? s + 200 : s))
+    // 박자 잡은 직후부터 60초 동안 이벤트(젠이 안 보임)
+    const acts = scene({ totalMs: 90000, spawns: seen, ramp: true, busy: [[17500, 77000]] })
+    const out = run(new SpawnTracker(opts), acts)
+    const locked = of(out, 'locked')
+    expect(locked).toHaveLength(1)
+    expect(of(out, 'lost')).toEqual([])
+    expectAlerts(of(out, 'alert'), spawns, locked[0], 500, 300)
+  })
+
+  it('젠 3번만으로 잡은 주기도 기본값(실측) 가까이 둔다', () => {
+    const spawns = every(2000, 7570, 20000).map((s, i) => (i === 2 ? s + 200 : s))
+    const t = new SpawnTracker(opts)
+    run(t, scene({ totalMs: 20000, spawns, ramp: true }))
+    // 젠 3개만 보면 7.67초로 맞아들지만, 실측 기본값 쪽으로 둔다
+    expect(Math.abs(t.status(20000).periodSec - 7.57)).toBeLessThan(0.015)
+  })
+
+  it('실제 주기가 기본값과 달라도(7.52초) 젠이 쌓이면 실측을 따른다', () => {
+    const spawns = every(2000, 7520, 150000)
+    const t = new SpawnTracker(opts)
+    const out = run(t, scene({ totalMs: 150000, spawns, ramp: true }))
+    expectAlerts(of(out, 'alert'), spawns, of(out, 'locked')[0] + 40000, 500, 250)
+    expect(t.status(150000).periodSec).toBeCloseTo(7.52, 2)
   })
 })

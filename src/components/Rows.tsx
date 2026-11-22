@@ -387,7 +387,7 @@ export function SpawnRow(p: {
       </div>
       <div className="cell">
         <label>젠 주기</label>
-        <NumberField value={sp.periodSec} min={3} max={30} step={0.1} onChange={(periodSec) => set({ periodSec })} suffix="초" width={56} />
+        <NumberField value={sp.periodSec} min={3} max={30} step={0.01} onChange={(periodSec) => set({ periodSec: Math.round(periodSec * 100) / 100 })} suffix="초" width={56} />
       </div>
       <div className="cell">
         <label>알림 시점</label>

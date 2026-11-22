@@ -62,6 +62,12 @@ const ONSET_KEEP_MS = 240000
 const HALF_LIFE_MS = 60000
 /** 박자를 잡는 데 필요한 같은 박자의 젠 수 */
 const MIN_SUPPORT = 3
+/**
+ * 같은 젠들이 맞아드는 주기가 여럿이면(본 젠이 적을 때) 설정값 쪽을 고른다. 젠 3개는 시각이 ±0.2초 흔들려
+ * 주기가 0.1초쯤 틀릴 수 있고, 그 직후 이벤트로 젠을 못 보면 젠마다 그만큼 밀린다. 젠이 쌓이면 주기가 틀린 쪽은
+ * 맞는 젠 수 자체가 줄어 이 값과 상관없이 실측을 따른다. 단위: (ms 차)² 당 잔차(ms²).
+ */
+const PERIOD_PRIOR_W = 10
 /** 주기는 설정값의 ±6% 안에서 2ms 단위로 찾는다(7.5초 → 7.05~7.95초. 처음 짐작 7.2초, 실측 7.53초) */
 const PERIOD_RANGE = 0.06
 const PERIOD_STEP_MS = 2
@@ -334,6 +340,7 @@ export class SpawnTracker {
           }
         }
         if (count < MIN_SUPPORT) continue
+        resid += PERIOD_PRIOR_W * (p - base) * (p - base)
         if (!best || score > best.score + 1e-9 || (Math.abs(score - best.score) <= 1e-9 && resid < best.resid)) {
           best = { score, resid, period: p, seed, count }
         }

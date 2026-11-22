@@ -1,7 +1,7 @@
 // 설정을 localStorage에 저장/복원한다.
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { DEFAULT_REGIONS, defaultSettings, normalizeTemplates, type Settings } from '../config'
+import { DEFAULT_REGIONS, DEFAULT_SPAWN_PERIOD_SEC, defaultSettings, normalizeTemplates, type Settings } from '../config'
 
 const KEY = 'mapletimer.settings.v1'
 
@@ -26,7 +26,12 @@ export function migrate(saved: Partial<Settings>): Settings {
     timed: (saved.timed ?? base.timed).map((a) => ({ ...a, templates: normalizeTemplates(a.templates) })),
     rune: { ...base.rune, ...saved.rune, templates: normalizeTemplates(saved.rune?.templates) },
     huntStop: { ...base.huntStop, ...saved.huntStop },
-    spawn: { ...base.spawn, ...saved.spawn },
+    spawn: {
+      ...base.spawn,
+      ...saved.spawn,
+      // 예전 기본값 7.5초는 실측(7.57초)으로 바꾼다. 직접 바꾼 값은 그대로 둔다.
+      ...(saved.spawn?.periodSec === 7.5 ? { periodSec: DEFAULT_SPAWN_PERIOD_SEC } : {}),
+    },
     combat: { ...base.combat, ...saved.combat, templates: normalizeTemplates(saved.combat?.templates) },
   }
 }
