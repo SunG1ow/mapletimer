@@ -81,5 +81,16 @@
   window.__templates = {
     janus: janus.toDataURL(), buff: buff.toDataURL(), rune: rune.toDataURL(), mua: mua.toDataURL(),
   }
-  navigator.mediaDevices.getDisplayMedia = async () => canvas.captureStream(15)
+  // window.__WINDOW_MODE면 창 모드 공유처럼 1922x1126(제목 표시줄 45px, 테두리 1px)으로 내보낸다.
+  let out = canvas
+  if (window.__WINDOW_MODE) {
+    out = document.createElement('canvas'); out.width = W + 2; out.height = H + 46
+    const og = out.getContext('2d')
+    setInterval(() => {
+      og.fillStyle = '#f3f3f3'; og.fillRect(0, 0, out.width, out.height)
+      og.fillStyle = '#222'; og.font = '14px sans-serif'; og.fillText('MapleStory', 12, 28)
+      og.drawImage(canvas, 1, 45)
+    }, 50)
+  }
+  navigator.mediaDevices.getDisplayMedia = async () => out.captureStream(15)
 })()

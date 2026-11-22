@@ -2,7 +2,7 @@
 
 import type { ExpChange } from './core/expwatch'
 import { Detector, type Detection, type DetectorConfig } from './detector'
-import type { Rgba } from './core/image'
+import { gameArea, type Rect, type Rgba } from './core/image'
 
 export type WorkerIn =
   | { type: 'config'; config: DetectorConfig; fps: number }
@@ -22,7 +22,8 @@ export type WorkerOut =
       /** 사냥 화면 변화량(젠 감지) */
       spawn: number | null
     }
-  | { type: 'size'; width: number; height: number }
+  /** width/height = 게임 화면(창 테두리를 뺀) 크기, raw = 공유 화면 그대로의 크기 */
+  | { type: 'size'; width: number; height: number; raw: { width: number; height: number } }
   | { type: 'error'; message: string }
 
 const detector = new Detector()
@@ -39,27 +40,31 @@ let lastH = 0
 const post = (msg: WorkerOut, transfer: Transferable[] = []) =>
   (self as unknown as Worker).postMessage(msg, transfer)
 
-function grab(src: VideoFrame | ImageBitmap, w: number, h: number): Rgba {
+/** 게임 화면 영역만 그린다(창 모드면 제목 표시줄·테두리를 뺀다). 이후 모든 감지는 이 좌표계. */
+function grab(src: VideoFrame | ImageBitmap, area: Rect): Rgba {
+  const { w, h } = area
   if (!canvas || canvas.width !== w || canvas.height !== h) {
     canvas = new OffscreenCanvas(w, h)
     ctx = canvas.getContext('2d', { willReadFrequently: true })
   }
-  ctx!.drawImage(src, 0, 0)
+  ctx!.drawImage(src, -area.x, -area.y)
   const img = ctx!.getImageData(0, 0, w, h)
   return { width: w, height: h, data: img.data }
 }
 
-function process(src: VideoFrame | ImageBitmap, w: number, h: number) {
-  if (w !== lastW || h !== lastH) {
-    lastW = w
-    lastH = h
-    post({ type: 'size', width: w, height: h })
+function process(src: VideoFrame | ImageBitmap, rawW: number, rawH: number) {
+  const area = gameArea(rawW, rawH) ?? { x: 0, y: 0, w: rawW, h: rawH }
+  const { w, h } = area
+  if (rawW !== lastW || rawH !== lastH) {
+    lastW = rawW
+    lastH = rawH
+    post({ type: 'size', width: w, height: h, raw: { width: rawW, height: rawH } })
   }
   if (!configured) return
   const t0 = performance.now()
   // 처리 전에 시각을 잡는다(처리 시간만큼 늦게 찍히면 젠 박자가 그만큼 밀린다).
   const at = Date.now()
-  const frame = grab(src, w, h)
+  const frame = grab(src, area)
   const detections = detector.detect(frame, t0)
   const exp = detector.watchExp(frame)
   const spawn = detector.watchSpawn(frame)

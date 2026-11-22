@@ -34,7 +34,7 @@ function withBank(s: Settings, profile: string, fn: (b: DigitBank) => DigitBank)
 export default function App() {
   const [settings, update, replace] = useSettings()
   const [active, setActive] = useState(false)
-  const [frame, setFrame] = useState<{ w: number; h: number } | null>(null)
+  const [frame, setFrame] = useState<{ w: number; h: number; rawW: number; rawH: number } | null>(null)
   const [snap, setSnap] = useState<EngineSnapshot | null>(null)
   const [log, setLog] = useState<string[]>([])
   const [editor, setEditor] = useState<EditorTarget | null>(null)
@@ -50,7 +50,7 @@ export default function App() {
   const capture = () =>
     (captureRef.current ??= new Capture({
       onMessage: (m) => {
-        if (m.type === 'size') setFrame({ w: m.width, h: m.height })
+        if (m.type === 'size') setFrame({ w: m.width, h: m.height, rawW: m.raw.width, rawH: m.raw.height })
         else if (m.type === 'result') engine.handle(m.detections, m.ms, m.at, m.exp, m.spawn)
         else if (m.type === 'error') setError(m.message)
       },
@@ -260,6 +260,9 @@ export default function App() {
           {active ? (
             <>
               <span className="dot on" /> 화면 공유 중 · {frame ? `${frame.w} × ${frame.h}` : '해상도 확인 중'}
+              {frame && (frame.rawW !== frame.w || frame.rawH !== frame.h) && (
+                <span className="muted"> (창 {frame.rawW} × {frame.rawH}에서 제목 표시줄·테두리 제외)</span>
+              )}
               {snap && <span className="muted"> · 처리 {snap.frameMs.toFixed(0)}ms</span>}
               <button className="ghost" onClick={stop}>
                 중지

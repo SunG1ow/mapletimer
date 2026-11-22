@@ -7,6 +7,7 @@ const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PAT
 const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } })
 page.on('console', (m) => m.type() === 'error' && console.log('console:', m.text()))
 page.on('pageerror', (e) => console.log('pageerror:', e.message))
+if (process.env.WINDOW_MODE) await page.addInitScript(() => (window.__WINDOW_MODE = true))
 await page.addInitScript(fs.readFileSync(dir + 'scene.js', 'utf8'))
 await page.goto(process.argv[2] ?? 'http://localhost:4173/')
 await page.evaluate(() => {
@@ -29,6 +30,12 @@ await page.evaluate(() => {
 await page.reload()
 await page.getByText('메이플 창 공유 시작').click()
 await page.getByText('프로필').waitFor()
+if (process.env.WINDOW_MODE) {
+  // 창 모드: 제목 표시줄·테두리를 빼고 게임 화면 1920x1080만 본다
+  const bar = await page.locator('.capture-bar').innerText()
+  if (!bar.includes('1920 × 1080') || !bar.includes('창 1922 × 1126')) throw new Error('창 모드 영역: ' + bar)
+  console.log('[창 모드]', bar.replace(/\s+/g, ' '))
+}
 await page.getByText('감지 ').first().waitFor({ timeout: 8000 })
 
 async function teach(rowName, text, setup) {

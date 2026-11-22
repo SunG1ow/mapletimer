@@ -1,5 +1,6 @@
 // 화면 공유를 시작하고 프레임을 감지 워커로 넘긴다.
 
+import { gameArea } from '../core/image'
 import type { WorkerIn, WorkerOut } from '../detector.worker'
 import DetectorWorker from '../detector.worker?worker&inline'
 
@@ -90,10 +91,12 @@ export class Capture {
   snapshot(): HTMLCanvasElement | null {
     const v = this.video
     if (!v || !v.videoWidth) return null
+    // 감지와 같은 좌표계(창 모드면 제목 표시줄·테두리를 뺀 게임 화면)
+    const a = gameArea(v.videoWidth, v.videoHeight) ?? { x: 0, y: 0, w: v.videoWidth, h: v.videoHeight }
     const c = document.createElement('canvas')
-    c.width = v.videoWidth
-    c.height = v.videoHeight
-    c.getContext('2d', { willReadFrequently: true })!.drawImage(v, 0, 0)
+    c.width = a.w
+    c.height = a.h
+    c.getContext('2d', { willReadFrequently: true })!.drawImage(v, -a.x, -a.y)
     return c
   }
 }

@@ -5,6 +5,7 @@ const dir = new URL('.', import.meta.url).pathname
 const browser = await chromium.launch({ executablePath: process.env.CHROMIUM_PATH, args: ['--autoplay-policy=no-user-gesture-required'] })
 const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } })
 page.on('pageerror', (e) => console.log('pageerror:', e.message))
+if (process.env.WINDOW_MODE) await page.addInitScript(() => (window.__WINDOW_MODE = true))
 await page.addInitScript(fs.readFileSync(dir + 'scene.js', 'utf8'))
 await page.goto(process.argv[2] ?? 'http://localhost:4173/')
 await page.evaluate(() => {

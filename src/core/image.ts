@@ -110,3 +110,31 @@ export function fracToRect(frac: Rect, width: number, height: number): Rect {
     h: Math.min(height - y, Math.round(frac.h * height)),
   }
 }
+
+/** 메이플이 쓰는 게임 해상도. 창 모드로 공유하면 여기에 제목 표시줄·테두리가 붙어 들어온다. */
+const GAME_SIZES: [number, number][] = [
+  [1920, 1080],
+  [1366, 768],
+  [1280, 720],
+  [1600, 900],
+  [1024, 768],
+  [2560, 1440],
+  [3840, 2160],
+]
+
+/**
+ * 창 모드 공유 화면(예: 1922x1126)에서 게임 화면 영역을 찾는다. 양옆 테두리는 같은 두께, 아래 테두리도 그 두께,
+ * 나머지 위쪽은 제목 표시줄로 본다. 딱 맞으면(전체 화면·게임 화면만 공유) null.
+ * 실사용: 노트북(2560x1600)에서 1920x1080 창 모드 → 1922x1126. 비율 영역(경험치 띠·젠 영역)이 제목 표시줄만큼 어긋났다.
+ */
+export function gameArea(width: number, height: number): Rect | null {
+  for (const [w, h] of GAME_SIZES) {
+    const side = width - w
+    const extra = height - h
+    if (side < 0 || side > 16 || side % 2 !== 0 || extra < side / 2 || extra > 80) continue
+    if (side === 0 && extra === 0) return null
+    const border = side / 2
+    return { x: border, y: height - h - border, w, h }
+  }
+  return null
+}
