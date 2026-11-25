@@ -458,29 +458,40 @@ export interface PreparedShape {
   height: number
   idx: Int32Array // 템플릿 내 전경 픽셀 인덱스
   rgb: Uint8Array // 전경 픽셀 색 (r,g,b 반복)
+  key: Uint8Array // 1 = 색이 뚜렷한 픽셀(룬의 보라색). 흰 테두리·어두운 선만 맞는 것은 룬이 아니다
 }
+
+/** 이만큼 채도(최대−최소 채널)가 있으면 '뚜렷한 색' 픽셀 */
+const KEY_SATURATION = 60
 
 export function prepareShape(img: Rgba, mask: Uint8Array): PreparedShape {
   const idx: number[] = []
   const rgb: number[] = []
+  const key: number[] = []
   for (let i = 0; i < mask.length; i++) {
     if (!mask[i]) continue
+    const r = img.data[i * 4]
+    const g = img.data[i * 4 + 1]
+    const b = img.data[i * 4 + 2]
     idx.push(i)
-    rgb.push(img.data[i * 4], img.data[i * 4 + 1], img.data[i * 4 + 2])
+    rgb.push(r, g, b)
+    key.push(Math.max(r, g, b) - Math.min(r, g, b) >= KEY_SATURATION ? 1 : 0)
   }
-  return { width: img.width, height: img.height, idx: Int32Array.from(idx), rgb: Uint8Array.from(rgb) }
+  return { width: img.width, height: img.height, idx: Int32Array.from(idx), rgb: Uint8Array.from(rgb), key: Uint8Array.from(key) }
 }
 
 // 템플릿을 JPG 스크린샷에서 만들면 실제 화면보다 색이 최대 ~57 어둡게 저장된다(실측). 미니맵 안에서만 찾으므로 넉넉하게.
 const COLOR_TOL = 72
 
 /**
- * 미니맵 플레이어 점 색(실제 게임 화면에서 측정): 노랑(본인), 칙칙한 분홍빨강(다른 사람).
+ * 미니맵 플레이어 점 색(실제 게임 화면에서 측정): 노랑(본인), 분홍빨강(다른 사람).
+ * 다른 사람 점은 JPG 스크린샷에서 칙칙하게(150,65,95), 실제 화면 공유에서는 밝게(240,45,115) 보인다.
  * 하늘색(길드원), 초록(파티)은 일반적인 값.
  */
 export const PLAYER_DOT_COLORS: readonly (readonly [number, number, number])[] = [
   [230, 250, 80],
   [150, 65, 95],
+  [235, 50, 115],
   [80, 220, 255],
   [60, 230, 60],
 ]
@@ -493,31 +504,55 @@ function nearDot(r: number, g: number, b: number): boolean {
   return false
 }
 
+/** 색조가 같은지: 빨강 대비 파랑·초록의 차이가 비슷하다(밝기는 COLOR_TOL로 따로 본다). */
+const HUE_TOL = 40
+function sameHue(r: number, g: number, b: number, tr: number, tg: number, tb: number): boolean {
+  return Math.abs(b - r - (tb - tr)) <= HUE_TOL && Math.abs(g - r - (tg - tr)) <= HUE_TOL
+}
+
+/** 보이는 부분 중 맞는 비율. 절반 넘게 가려지면 근거가 부족하니 보이는 비율만큼 깎는다. */
+function visibleFraction(hit: number, hidden: number, n: number): number {
+  const visible = n - hidden
+  if (visible <= 0) return 0
+  return (hit / visible) * Math.min(1, visible / (n * 0.5))
+}
+
 /**
  * 플레이어 점에 가려진 픽셀은 판단에서 빼고 "보이는 부분 중 맞는 비율"을 낸다.
- * 다만 절반 넘게 가려지면 근거가 부족하니 보이는 비율만큼 깎는다.
+ * 점수는 전체 비율과 '뚜렷한 색(보라) 픽셀' 비율 중 낮은 쪽: 흰 테두리를 두른 다른 사람 점 여러 개가 겹치면
+ * 테두리와 어두운 틈, 분홍과 흰색이 섞인 가장자리(연보라와 밝기가 비슷)만으로 0.65를 넘어 룬 오알림이 났다(실사용).
+ * 그래서 보라 픽셀은 색조(빨강 대비 파랑·초록)까지 맞아야 맞은 것으로 센다. 분홍은 빨강이 훨씬 세서 통과하지 못한다.
  */
 function fractionAt(region: Rgba, offs: Int32Array, s: PreparedShape, base: number): number {
   const d = region.data
   const n = offs.length
   let hit = 0
   let hidden = 0
+  let keyN = 0
+  let keyHit = 0
+  let keyHidden = 0
   for (let k = 0; k < n; k++) {
     const p = (base + offs[k]) * 4
     const q = k * 3
+    const key = s.key[k]
+    keyN += key
     if (
       Math.abs(d[p] - s.rgb[q]) <= COLOR_TOL &&
       Math.abs(d[p + 1] - s.rgb[q + 1]) <= COLOR_TOL &&
       Math.abs(d[p + 2] - s.rgb[q + 2]) <= COLOR_TOL
-    )
+    ) {
       hit++
-    else if (nearDot(d[p], d[p + 1], d[p + 2])) hidden++
+      if (key && sameHue(d[p], d[p + 1], d[p + 2], s.rgb[q], s.rgb[q + 1], s.rgb[q + 2])) keyHit++
+    } else if (nearDot(d[p], d[p + 1], d[p + 2])) {
+      hidden++
+      keyHidden += key
+    }
     // 남은 픽셀이 모두 맞아도 30%를 못 넘으면 중단
     else if ((k & 7) === 7 && hit + hidden + (n - k) < n * 0.3) return 0
   }
-  const visible = n - hidden
-  if (visible <= 0) return 0
-  return (hit / visible) * Math.min(1, visible / (n * 0.5))
+  const all = visibleFraction(hit, hidden, n)
+  // 뚜렷한 색 픽셀이 거의 없는 템플릿(무채색)은 전체 비율만 쓴다
+  return keyN >= 4 ? Math.min(all, visibleFraction(keyHit, keyHidden, keyN)) : all
 }
 
 /** 점수 = 전경 픽셀 중 색이 맞는 비율(0..1). 2px 간격으로 훑고 상위 후보 주변을 정밀 탐색. */

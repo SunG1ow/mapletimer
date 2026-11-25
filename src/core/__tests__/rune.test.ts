@@ -96,4 +96,25 @@ describe('룬 탐지 (맵 무관, 가림 허용)', () => {
     const m = findShape(map, shape)
     expect(m?.score ?? 0).toBeLessThan(0.65)
   })
+
+  it('흰 테두리 두른 밝은 분홍 점 여럿이 붙어 있어도 룬이 아니다(실사용 오알림)', () => {
+    // 실제 화면 공유에서 다른 사람 점은 (240,45,115), 흰 테두리, 가장자리는 분홍과 흰색이 섞인다(241,137,174 등).
+    const outlined = (img: Rgba, cx: number, cy: number, color: number[]) => {
+      dot(img, cx, cy, [235, 235, 235], 5)
+      dot(img, cx, cy, [241, 137, 174], 4)
+      dot(img, cx, cy, color, 3)
+    }
+    for (let seed = 10; seed < 30; seed++) {
+      const map = minimap(seed)
+      const r = rng(seed)
+      const x0 = 40 + Math.floor(r() * 200)
+      const y0 = 30 + Math.floor(r() * 90)
+      // 노란 점(본인) 하나와 분홍 점 셋이 2~10px 간격으로 겹치거나 붙어 있음
+      outlined(map, x0, y0, [240, 45, 115])
+      outlined(map, x0 + 8 + Math.floor(r() * 3), y0, YELLOW)
+      outlined(map, x0 + 18 + Math.floor(r() * 3), y0 + Math.floor(r() * 3) - 1, [240, 45, 115])
+      outlined(map, x0 + 26 + Math.floor(r() * 3), y0, [225, 55, 110])
+      expect(findShape(map, shape)?.score ?? 0, `seed ${seed}`).toBeLessThan(0.65)
+    }
+  })
 })
